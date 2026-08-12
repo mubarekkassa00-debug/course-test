@@ -1,7 +1,7 @@
 // app/courses/[id]/lessons/[lessonId]/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -12,6 +12,10 @@ import {
   CheckCircle,
   XCircle,
   BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  Menu,
+  X,
 } from 'lucide-react';
 
 interface Lesson {
@@ -191,6 +195,10 @@ export default function LessonPage() {
   const lesson = currentIndex !== -1 ? lessons[currentIndex] : null;
 
   const [activeTab, setActiveTab] = useState<'lesson' | 'quiz'>('lesson');
+  const [currentImg, setCurrentImg] = useState(0);
+  const [audioEnded, setAudioEnded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const [quiz, setQuiz] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
@@ -198,7 +206,15 @@ export default function LessonPage() {
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
 
+  // Reset image index and audio state when lesson changes
+  useEffect(() => {
+    setCurrentImg(0);
+    setAudioEnded(false);
+  }, [lesson]);
+
+  // Fetch quiz with fallback logic
   useEffect(() => {
     if (!lesson) return;
     let cancelled = false;
@@ -208,18 +224,18 @@ export default function LessonPage() {
       setQuizSubmitted(false);
       setScore(null);
       setSelectedAnswers({});
+      setActiveTab('lesson');
+      setCurrentStep(0);
 
       try {
         const lessonNum = lesson.lessonNumber;
 
-        // 1. በ lessonNumber ፈልግ
         let { data: quizData } = await supabase
           .from('quizzes')
           .select('*')
           .eq('lesson_id', lessonNum)
           .maybeSingle();
 
-        // 2. ካልተገኘ በ lesson.id ፈልግ
         if (!quizData) {
           const { data: byStringId } = await supabase
             .from('quizzes')
@@ -229,7 +245,6 @@ export default function LessonPage() {
           quizData = byStringId;
         }
 
-        // 3. አሁንም ካልተገኘ በ kitab_id ፈልግ
         if (!quizData && courseId) {
           const { data: byKitab } = await supabase
             .from('quizzes')
@@ -239,7 +254,6 @@ export default function LessonPage() {
           quizData = byKitab;
         }
 
-        // 4. የመጨረሻ አማራጭ፡ የትኛውንም በቴብሉ ያለ ፈተና ውሰድ
         if (!quizData) {
           const { data: latest } = await supabase
             .from('quizzes')
@@ -249,8 +263,6 @@ export default function LessonPage() {
             .maybeSingle();
           quizData = latest;
         }
-
-        if (cancelled) return;
 
         let fetchedQuestions: any[] = [];
 
@@ -269,7 +281,6 @@ export default function LessonPage() {
           }
         }
 
-        // ከ Supabase ጥያቄ ካልመጣ፡ አውቶማቲክ Fallback Questions ን መጠቀም
         if (fetchedQuestions.length === 0) {
           fetchedQuestions = fallbackQuestionsMap[lessonNum] || fallbackQuestionsMap[1];
           quizData = { id: 999, title: `${lesson.title} - ፈተና` };
@@ -281,7 +292,6 @@ export default function LessonPage() {
         }
       } catch (err) {
         console.error('Quiz fetch error:', err);
-        // ኤረር ቢኖር እንኳ ነባሪ ጥያቄዎችን አዘጋጅ
         setQuiz({ id: 999, title: `${lesson.title} - ፈተና` });
         setQuestions(fallbackQuestionsMap[lesson.lessonNumber] || fallbackQuestionsMap[1]);
       } finally {
@@ -293,27 +303,73 @@ export default function LessonPage() {
     return () => { cancelled = true; };
   }, [lesson, courseId]);
 
+  // Audio end event
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !lesson?.audioUrl) return;
+
+    const handleEnded = () => setAudioEnded(true);
+    audio.addEventListener('ended', handleEnded);
+    if (audio.ended) setAudioEnded(true);
+
+    return () => audio.removeEventListener('ended', handleEnded);
+  }, [lesson?.audioUrl]);
+
   const handleOptionSelect = (questionId: number, optionText: string) => {
     if (quizSubmitted) return;
     setSelectedAnswers((prev) => ({ ...prev, [questionId]: optionText }));
   };
 
-  const handleSubmitQuiz = () => {
-    if (!questions.length) return;
+  const handleSubmitQuiz = async () => {
+    if (!questions.length || !lesson) return; // <-- extra null check
     const correctCount = questions.reduce((acc, q) => {
       const selected = selectedAnswers[q.id];
       return selected === q.correct_answer ? acc + 1 : acc;
     }, 0);
     setScore(correctCount);
     setQuizSubmitted(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        alert('የተጠቃሚ መለያ አልተገኘም። እባክዎ ደግመው ይሞክሩ።');
+        return;
+      }
+      const { error } = await supabase.from('quiz_attempts').insert({
+        user_id: user.id,
+        quiz_id: quiz?.id || 999,
+        lesson_id: lesson.id,   // safe because lesson is checked above
+        score: correctCount,
+        total: questions.length,
+        answers: selectedAnswers,
+        submitted_at: new Date().toISOString(),
+      });
+      if (error) {
+        alert('የመላክ ስህተት፦ ' + error.message);
+      } else {
+        alert('ውጤትህ በትክክል ተመዝግቧል!');
+      }
+    } catch (e: any) {
+      console.error('Failed to save quiz result', e);
+      alert('የመላክ ስህተት፦ ' + (e.message || 'Unknown error'));
+    }
   };
 
   const goToQuiz = () => setActiveTab('quiz');
   const goToLesson = () => setActiveTab('lesson');
 
+  const nextImage = () => lesson && setCurrentImg((prev) => Math.min(prev + 1, lesson.images.length - 1));
+  const prevImage = () => lesson && setCurrentImg((prev) => Math.max(prev - 1, 0));
+
+  const nextStep = () => {
+    if (currentStep < questions.length - 1) setCurrentStep((prev) => prev + 1);
+    else handleSubmitQuiz();
+  };
+  const prevStep = () => { if (currentStep > 0) setCurrentStep((prev) => prev - 1); };
+
   if (!lesson) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 px-6">
+      <div className="h-screen flex items-center justify-center bg-slate-950 text-slate-100 px-6">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-white mb-2">ደርሱ አልተገኘም</h1>
           <p className="text-slate-400">ይቅርታ፣ የጠየቁት ደርስ በስርዓቱ ውስጥ አልተገኘም።</p>
@@ -330,11 +386,12 @@ export default function LessonPage() {
   }
 
   const quizAvailable = questions.length > 0;
+  const totalImages = lesson.images.length;
 
   return (
-    <div className="w-full min-h-screen bg-slate-950 text-slate-100 p-4 pb-36 space-y-6">
-      {/* Sticky Header */}
-      <header className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 p-3 rounded-xl shadow-md flex items-center justify-between">
+    <div className="h-screen max-h-[100dvh] flex flex-col overflow-hidden bg-slate-950 text-slate-100">
+      {/* Header with back and hamburger */}
+      <header className="flex-shrink-0 bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between relative z-30">
         <div className="flex items-center gap-3">
           {activeTab === 'lesson' ? (
             <Link href={`/courses/${courseId}`} className="p-2 bg-slate-800 rounded-lg active:bg-slate-700">
@@ -347,26 +404,63 @@ export default function LessonPage() {
           )}
           <div>
             <p className="text-xs text-slate-400">{activeTab === 'lesson' ? 'ኡሱሉ ሰላሳ' : 'ፈተና'}</p>
-            <h1 className="text-base font-bold text-white">{lesson.title}</h1>
+            <h1 className="text-base font-bold text-white truncate">{lesson.title}</h1>
           </div>
         </div>
-        <span className="text-xs font-medium text-slate-400">{lesson.lessonNumber}/{lessons.length}</span>
+        <button
+          onClick={() => setMenuOpen(!menuOpen)}
+          className="p-2 bg-slate-800 rounded-lg active:bg-slate-700"
+        >
+          {menuOpen ? <X className="h-5 w-5 text-slate-300" /> : <Menu className="h-5 w-5 text-slate-300" />}
+        </button>
       </header>
 
-      {/* LESSON VIEW */}
-      {activeTab === 'lesson' && (
-        <div className="space-y-6">
-          {/* Images Stacked Top-to-Bottom */}
-          <div className="space-y-4">
-            {lesson.images.length > 0 ? (
-              lesson.images.map((img, i) => (
+      {/* Hamburger Menu Dropdown */}
+      {menuOpen && (
+        <div className="absolute top-14 right-2 z-50 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-2 w-48">
+          <Link href="/dashboard" className="block px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 rounded-lg mx-2">
+            ወደ ዳሽቦርድ
+          </Link>
+          <Link href="/courses" className="block px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 rounded-lg mx-2">
+            የእኔ ኮርሶች
+          </Link>
+          <Link href="/profile" className="block px-4 py-2 text-sm text-slate-200 hover:bg-slate-700 rounded-lg mx-2">
+            ፕሮፋይል
+          </Link>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      {activeTab === 'lesson' ? (
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Image Slider */}
+          <div className="flex-1 min-h-0 p-3 flex items-center justify-center">
+            {totalImages > 0 ? (
+              <div className="relative w-full h-full flex items-center justify-center bg-slate-900 rounded-2xl overflow-hidden border border-slate-800">
                 <img
-                  key={i}
-                  src={img}
-                  alt={`ገፅ ${i + 1}`}
-                  className="w-full h-auto rounded-xl border border-slate-800 shadow-lg"
+                  src={lesson.images[currentImg]}
+                  alt={`ገፅ ${currentImg + 1}`}
+                  className="max-w-full max-h-full object-contain"
                 />
-              ))
+                {totalImages > 1 && (
+                  <>
+                    <button
+                      onClick={prevImage}
+                      disabled={currentImg === 0}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 bg-black/40 rounded-full disabled:opacity-30"
+                    >
+                      <ChevronLeft className="h-5 w-5 text-white" />
+                    </button>
+                    <button
+                      onClick={nextImage}
+                      disabled={currentImg === totalImages - 1}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-black/40 rounded-full disabled:opacity-30"
+                    >
+                      <ChevronRight className="h-5 w-5 text-white" />
+                    </button>
+                  </>
+                )}
+              </div>
             ) : (
               <div className="text-center py-12 text-slate-500">
                 <ImageIcon className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -374,132 +468,124 @@ export default function LessonPage() {
               </div>
             )}
           </div>
+          {totalImages > 1 && (
+            <p className="text-center text-xs text-slate-500 py-1">
+              ገፅ {currentImg + 1} / {totalImages}
+            </p>
+          )}
 
-          {/* Audio Player Card & Inline Quiz Trigger */}
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl space-y-4 shadow-xl">
+          {/* Audio Player & Quiz Button (bottom section) */}
+          <div className="flex-shrink-0 p-3 bg-slate-900 border-t border-slate-800">
             {lesson.audioUrl ? (
-              <div>
-                <p className="text-xs text-slate-400 mb-2 flex items-center gap-1">
-                  <Volume2 className="h-4 w-4 text-emerald-400" />
-                  የደርሱ ኦዲዮ (ማብራሪያ)
-                </p>
-                <audio controls className="w-full rounded-lg" src={lesson.audioUrl}>
+              <div className="mb-3">
+                <audio ref={audioRef} controls className="w-full rounded-lg" src={lesson.audioUrl} preload="metadata">
                   Your browser does not support the audio element.
                 </audio>
               </div>
             ) : (
-              <div className="text-center py-4 text-slate-500">
-                <Volume2 className="h-8 w-8 mx-auto mb-1 opacity-50" />
+              <div className="text-center py-2 text-slate-500 mb-3">
+                <Volume2 className="h-6 w-6 mx-auto opacity-50" />
                 <p className="text-xs">ኦዲዮ አልተገኘም</p>
               </div>
             )}
 
-            {loadingQuiz ? (
-              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
-                ፈተናውን በመጫን ላይ...
-              </div>
-            ) : (
+            {quizAvailable && (audioEnded || !lesson.audioUrl) && (
               <button
                 type="button"
                 onClick={goToQuiz}
-                className="w-full py-4 bg-emerald-600 active:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all text-base cursor-pointer"
+                className="w-full py-3 bg-emerald-600 active:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
               >
                 <BookOpen className="h-5 w-5" />
                 ፈተናውን ጀምር
               </button>
             )}
+            {loadingQuiz && !quizAvailable && (
+              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
+                ፈተናውን በመጫን ላይ...
+              </div>
+            )}
           </div>
         </div>
-      )}
-
-      {/* QUIZ VIEW */}
-      {activeTab === 'quiz' && quizAvailable && (
-        <div className="space-y-6">
+      ) : (
+        /* Quiz View - one question at a time */
+        <div className="flex-1 flex flex-col min-h-0 p-3 overflow-auto">
           <button
             type="button"
             onClick={goToLesson}
-            className="w-full py-3 bg-slate-800 active:bg-slate-700 text-slate-200 text-sm font-medium rounded-xl flex items-center justify-center gap-2"
+            className="mb-3 py-2 bg-slate-800 active:bg-slate-700 text-slate-200 text-sm font-medium rounded-xl flex items-center justify-center gap-2"
           >
             <ArrowLeft className="h-4 w-4" /> ወደ ደርሱ ተመለስ
           </button>
 
-          <h3 className="text-lg font-bold text-white">{quiz?.title || 'የደርሱ ፈተና'}</h3>
+          <h3 className="text-lg font-bold text-white mb-4">{quiz?.title || 'የደርሱ ፈተና'}</h3>
 
-          <div className="space-y-4">
-            {questions.map((q, qIdx) => (
-              <div key={q.id} className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-                <p className="text-sm font-medium text-white">{qIdx + 1}. {q.question_text}</p>
+          {!quizSubmitted ? (
+            <>
+              <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-1 min-h-0 overflow-auto">
+                <p className="text-sm font-medium text-white mb-3">
+                  {currentStep + 1}. {questions[currentStep].question_text}
+                </p>
                 <div className="space-y-2">
-                  {q.options.map((opt: string, optIdx: number) => {
-                    const isSelected = selectedAnswers[q.id] === opt;
-                    const isCorrectAnswer = q.correct_answer === opt;
-                    let optionStyle = 'border-slate-800 bg-slate-950 text-slate-300';
-                    if (quizSubmitted) {
-                      if (isSelected && isCorrectAnswer) optionStyle = 'border-green-500 bg-green-900/40 text-green-300';
-                      else if (isSelected && !isCorrectAnswer) optionStyle = 'border-red-500 bg-red-900/40 text-red-300';
-                      else if (isCorrectAnswer) optionStyle = 'border-green-500 bg-green-900/40 text-green-300';
-                    } else if (isSelected) {
-                      optionStyle = 'border-emerald-500 bg-emerald-950 text-emerald-300';
-                    }
+                  {questions[currentStep].options.map((opt: string, optIdx: number) => {
+                    const isSelected = selectedAnswers[questions[currentStep].id] === opt;
                     return (
                       <button
                         key={optIdx}
                         type="button"
-                        onClick={() => handleOptionSelect(q.id, opt)}
-                        disabled={quizSubmitted}
-                        className={`w-full text-left p-3 rounded-xl border text-sm transition-colors ${optionStyle}`}
+                        onClick={() => handleOptionSelect(questions[currentStep].id, opt)}
+                        className={`w-full text-left p-3 rounded-xl border text-sm transition-colors ${
+                          isSelected
+                            ? 'border-emerald-500 bg-emerald-950 text-emerald-300'
+                            : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'
+                        }`}
                       >
                         {opt}
                       </button>
                     );
                   })}
                 </div>
-                {quizSubmitted && (
-                  <div className="text-xs mt-2">
-                    {selectedAnswers[q.id] === q.correct_answer ? (
-                      <span className="text-green-400 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" /> ትክክል</span>
-                    ) : (
-                      <span className="text-red-400 flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> ስህተት (ትክክለኛው፡ {q.correct_answer})</span>
-                    )}
-                  </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 mt-3">
+                <button
+                  type="button"
+                  onClick={prevStep}
+                  disabled={currentStep === 0}
+                  className="flex-1 py-3 rounded-xl bg-slate-800 text-white font-medium disabled:opacity-40"
+                >
+                  ወደ ኋላ
+                </button>
+                {currentStep < questions.length - 1 ? (
+                  <button
+                    type="button"
+                    onClick={nextStep}
+                    className="flex-1 py-3 rounded-xl bg-slate-800 text-white font-medium"
+                  >
+                    ቀጣይ
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSubmitQuiz}
+                    className="flex-1 py-3 rounded-xl bg-emerald-600 text-white font-bold"
+                  >
+                    አስረክብ
+                  </button>
                 )}
               </div>
-            ))}
-          </div>
-
-          {!quizSubmitted ? (
-            <button
-              type="button"
-              onClick={handleSubmitQuiz}
-              disabled={Object.keys(selectedAnswers).length < questions.length}
-              className="w-full py-4 bg-emerald-600 active:bg-emerald-700 text-white font-semibold rounded-xl disabled:opacity-50"
-            >
-              ፈተናውን አስገባ
-            </button>
+            </>
           ) : (
-            <div className="text-center space-y-3">
+            <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
               <p className="text-emerald-400 font-bold text-lg">ውጤት፡ {score}/{questions.length}</p>
-              <button type="button" onClick={goToLesson} className="w-full py-3 bg-slate-800 active:bg-slate-700 text-white rounded-xl">
+              <button
+                type="button"
+                onClick={goToLesson}
+                className="w-full py-3 bg-slate-800 active:bg-slate-700 text-white rounded-xl"
+              >
                 ወደ ደርሱ ተመለስ
               </button>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Sticky Bottom Bar for Mobile Screen - Always Visible */}
-      {activeTab === 'lesson' && quizAvailable && (
-        <div className="fixed bottom-0 left-0 right-0 p-3 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 z-30 shadow-2xl">
-          <div className="max-w-md mx-auto flex items-center gap-3">
-            <button
-              type="button"
-              onClick={goToQuiz}
-              className="w-full py-3.5 bg-emerald-600 active:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg text-base cursor-pointer"
-            >
-              <BookOpen className="h-5 w-5" />
-              ፈተናውን ጀምር
-            </button>
-          </div>
         </div>
       )}
     </div>
