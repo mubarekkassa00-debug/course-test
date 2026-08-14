@@ -46,16 +46,14 @@ const courses = [
     id: 1,
     title: 'ሦስቱ መሠረቶች (አል-ኡሱል አል-ሰላሳ)',
     category: 'አቂዳ',
-    lessonsCount: 12,
-    progress: 0,
+    lessonsCount: 11,
     gradient: 'from-blue-600 to-blue-800',
   },
   {
     id: 2,
     title: '40ሩ የነወዊ ሀዲሶች (አል-አርባዒን)',
     category: 'ሀዲስ',
-    lessonsCount: 15,
-    progress: 0,
+    lessonsCount: 11,
     gradient: 'from-purple-600 to-purple-800',
   },
   {

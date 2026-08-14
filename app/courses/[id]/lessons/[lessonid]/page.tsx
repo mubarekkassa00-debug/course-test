@@ -26,29 +26,9 @@ interface Lesson {
   audioUrl: string;
 }
 
-// ነባሪ የኡሱሉ ሰላሳ የልምምድ ጥያቄዎች (ከ Supabase ዳታ ሳይመጣ ቢቀር እንኳን አፑ እንዳይዘጋ)
-const fallbackQuestionsMap: Record<number, any[]> = {
-  1: [
-    {
-      id: 101,
-      question_text: 'እያንዳንዱ ሙስሊም ሊማራቸው የሚገቡ ሶስቱ መሰረታዊ ነጥቦች (ኡሱሉ ሰላሳ) የትኞቹ ናቸው?',
-      options: [
-        'አላህን፣ ዲኑን (እስልምናን) እና ነቢዩን (ሱ.ዐ.ወ) ማወቅ',
-        'ሶላት፣ ፆም እና ዘካ ማወቅ',
-        'ቁርኣን፣ ሐዲስ እና ፊቅህ ማወቅ',
-        'ታሪክ፣ ቋንቋ እና ሂሳብ ማወቅ',
-      ],
-      correct_answer: 'አላህን፣ ዲኑን (እስልምናን) እና ነቢዩን (ሱ.ዐ.ወ) ማወቅ',
-    },
-    {
-      id: 102,
-      question_text: 'በሱረቱል ዐስር ላይ ኢማሙ ሻፊዒይ (ረሒመሁላህ) እንደተናገሩት አላህ በሰዎች ላይ ማስረጃ ያደረገው የትኛውን ሱራ ነው?',
-      options: ['ሱረቱል ፋቲሓ', 'ሱረቱል ዐስር', 'ሱረቱል እክላስ', 'ሱረቱል በቀራህ'],
-      correct_answer: 'ሱረቱል ዐስር',
-    },
-  ],
-};
-
+// ---------------------------------------------------------------------------
+// 1) ኡሱሉ ሰላሳ (Usul as-Salasa) – ቀደም ያለው ዳታ ሳይነካ
+// ---------------------------------------------------------------------------
 const lessons: Lesson[] = [
   {
     id: 'lesson-1',
@@ -185,14 +165,184 @@ const lessons: Lesson[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// 2) አርባኢን ነወዊ (Arba'in An-Nawawi) – አዲስ ኮርስ ማስገቢያ
+//    lessonNumber 101–111 በመጠቀም ከኡሱሉ ሰላሳ ጋር እንዳይጋጭ
+// ---------------------------------------------------------------------------
+const lessonsArbaeen: Lesson[] = [
+  {
+    id: 'arbaeen-lesson-1',
+    lessonNumber: 101,
+    title: 'አርባኢን ነወዊ - ደርስ 1',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691533/arbain-image_page-0001_soy3pt.jpg', // Cloudinary image URL 1
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691534/arbain-image_page-0002_stnuky.jpg', // Cloudinary image URL 2
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691534/arbain-image_page-0003_wsmu9u.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691536/arbain-image_page-0004_msky4g.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691536/arbain-image_page-0005_svoclw.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691536/arbain-image_page-0006_u3nchl.jpg',
+       // Cloudinary image URL 3 (አስፈላጊ ከሆነ)
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691144/arbain-01.mp3_spzu5j.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-2',
+    lessonNumber: 102,
+    title: 'አርባኢን ነወዊ - ደርስ 2',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691536/arbain-image_page-0007_cuo3xl.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691537/arbain-image_page-0008_mz70pw.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691539/arbain-image_page-0009_ug7sc9.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691541/arbain-image_page-0010_yhttnz.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691543/arbain-image_page-0011_ov2joc.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691543/arbain-image_page-0012_u8xr9w.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691543/arbain-image_page-0013_ujralo.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691545/arbain-image_page-0014_ddsk3f.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691150/arbain-02.mp3_mzd2x4.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-3',
+    lessonNumber: 103,
+    title: 'አርባኢን ነወዊ - ደርስ 3',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691546/arbain-image_page-0015_bkaumo.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691548/arbain-image_page-0016_nwtudl.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691548/arbain-image_page-0017_wdwqnk.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691094/arbain-03.mp3_ios6v6.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-4',
+    lessonNumber: 104,
+    title: 'አርባኢን ነወዊ - ደርስ 4',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691549/arbain-image_page-0018_fewrnd.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691550/arbain-image_page-0019_kll7qy.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691551/arbain-image_page-0020_dleihi.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691039/arbain-04.mp3_ih6yfn.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-5',
+    lessonNumber: 105,
+    title: 'አርባኢን ነወዊ - ደርስ 5',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691553/arbain-image_page-0021_yhrczu.jpg',
+       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691553/arbain-image_page-0022_njihop.jpg', 
+       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691556/arbain-image_page-0023_tkq3s5.jpg',
+       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691557/arbain-image_page-0024_fu20fy.jpg',
+      ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691044/arbain-05.mp3_jbpdij.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-6',
+    lessonNumber: 106,
+    title: 'አርባኢን ነወዊ - ደርስ 6',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691558/arbain-image_page-0025_onybqq.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691558/arbain-image_page-0026_vlwrja.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691560/arbain-image_page-0027_dkwgvk.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691561/arbain-image_page-0028_cchx2t.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691562/arbain-image_page-0029_ws7bnl.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691563/arbain-image_page-0030_fjbdft.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691059/arbain-06.mp3_ly19mh.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-7',
+    lessonNumber: 107,
+    title: 'አርባኢን ነወዊ - ደርስ 7',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691564/arbain-image_page-0031_f6msbw.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691565/arbain-image_page-0032_xxwil6.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691566/arbain-image_page-0033_uiae1n.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691567/arbain-image_page-0034_rnjlm7.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691568/arbain-image_page-0035_e8zw1k.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691130/arbain-07.mp3_mov7y7.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-8',
+    lessonNumber: 108,
+    title: 'አርባኢን ነወዊ - ደርስ 8',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691569/arbain-image_page-0036_jje1st.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691571/arbain-image_page-0037_vfzent.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691572/arbain-image_page-0038_i0cupy.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691129/arbain-08.mp3_hqf5ej.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-9',
+    lessonNumber: 109,
+    title: 'አርባኢን ነወዊ - ደርስ 9',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691573/arbain-image_page-0039_ojetbr.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691573/arbain-image_page-0040_yn38z0.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691574/arbain-image_page-0041_adcsco.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691575/arbain-image_page-0042_uvg3hl.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691576/arbain-image_page-0043_cbb0lf.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691166/arbain-09.mp3_w7obpw.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-10',
+    lessonNumber: 110,
+    title: 'አርባኢን ነወዊ - ደርስ 10',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691577/arbain-image_page-0044_dfvxkb.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691578/arbain-image_page-0045_cdcenh.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691580/arbain-image_page-0046_yawnfs.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691581/arbain-image_page-0047_upy9p5.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691582/arbain-image_page-0048_diknbn.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691168/arbain-10.mp3_vqudpf.mp3',
+  },
+  {
+    id: 'arbaeen-lesson-11',
+    lessonNumber: 111,
+    title: 'አርባኢን ነወዊ - ደርስ 11',
+    images: ['https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691584/arbain-image_page-0049_qshxqb.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691585/arbain-image_page-0050_mlahum.jpg', 
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691586/arbain-image_page-0051_eijkab.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691587/arbain-image_page-0052_hzobrt.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691588/arbain-image_page-0053_nxcbhz.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691590/arbain-image_page-0054_vx36su.jpg',
+    ],
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691176/arbain-11.mp3_evcigs.mp3',
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 3) ኮርሶችን በ courseId ለይቶ የሚያገኝ ካርታ
+//    '1' = ኡሱሉ ሰላሳ
+//    '2' = አርባኢን ነወዊ
+// ---------------------------------------------------------------------------
+const courseLessonsMap: Record<string, Lesson[]> = {
+  '1': lessons,
+  '2': lessonsArbaeen,
+  'usul': lessons,
+  'arbaeen': lessonsArbaeen,
+  'arbain': lessonsArbaeen,
+};
+
 export default function LessonPage() {
   const params = useParams();
 
   const courseId = params?.id as string;
   const currentLessonId = (params?.lessonId || params?.lessonid) as string;
 
-  const currentIndex = lessons.findIndex((l) => l.id === currentLessonId);
-  const lesson = currentIndex !== -1 ? lessons[currentIndex] : null;
+  // በ courseId መሰረት ትክክለኛውን የትምህርት ዝርዝር ምረጥ
+  const combinedLessons = [...lessons, ...lessonsArbaeen];
+  const courseLessons = courseLessonsMap[courseId] || combinedLessons;
+
+  // ደርሱን በተለያዩ የ ID ቅርጸቶች ፈልግ
+  const currentIndex = courseLessons.findIndex((l) => {
+    const normalizedParam = currentLessonId.trim().toLowerCase();
+    return (
+      l.id === currentLessonId ||
+      String(l.lessonNumber) === currentLessonId ||
+      l.id.toLowerCase() === normalizedParam ||
+      l.id.toLowerCase().endsWith(normalizedParam) ||
+      `lesson-${String(l.lessonNumber)}` === currentLessonId ||
+      `arbaeen-lesson-${String(l.lessonNumber)}` === currentLessonId
+    );
+  });
+
+  const lesson = currentIndex !== -1 ? courseLessons[currentIndex] : null;
 
   const [activeTab, setActiveTab] = useState<'lesson' | 'quiz'>('lesson');
   const [currentImg, setCurrentImg] = useState(0);
@@ -206,6 +356,7 @@ export default function LessonPage() {
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
 
   // Reset image index and audio state when lesson changes
@@ -214,13 +365,14 @@ export default function LessonPage() {
     setAudioEnded(false);
   }, [lesson]);
 
-  // Fetch quiz with fallback logic
+  // Fetch quiz and questions from Supabase dynamically using active lesson_id
   useEffect(() => {
     if (!lesson) return;
     let cancelled = false;
 
     const fetchQuiz = async () => {
       setLoadingQuiz(true);
+      setQuizError(null);
       setQuizSubmitted(false);
       setScore(null);
       setSelectedAnswers({});
@@ -228,72 +380,62 @@ export default function LessonPage() {
       setCurrentStep(0);
 
       try {
-        const lessonNum = lesson.lessonNumber;
+        const numericLessonId = lesson.lessonNumber; // integer lesson_id
 
-        let { data: quizData } = await supabase
+        // 1. Fetch quiz metadata (optional, for title)
+        const { data: quizData, error: quizFetchError } = await supabase
           .from('quizzes')
           .select('*')
-          .eq('lesson_id', lessonNum)
+          .eq('lesson_id', numericLessonId)
           .maybeSingle();
 
-        if (!quizData) {
-          const { data: byStringId } = await supabase
-            .from('quizzes')
-            .select('*')
-            .eq('lesson_id', lesson.id)
-            .maybeSingle();
-          quizData = byStringId;
+        if (cancelled) return;
+
+        if (quizFetchError) {
+          setQuizError('ፈተናውን ማምጣት አልተቻለም። እባክዎ ደግመው ይሞክሩ።');
+          setQuiz(null);
+          setQuestions([]);
+          return;
         }
 
-        if (!quizData && courseId) {
-          const { data: byKitab } = await supabase
-            .from('quizzes')
-            .select('*')
-            .eq('kitab_id', courseId)
-            .maybeSingle();
-          quizData = byKitab;
+        // 2. Fetch questions directly from quiz_questions by lesson_id
+        const { data: questionsData, error: questionsFetchError } = await supabase
+          .from('quiz_questions')
+          .select('*')
+          .eq('lesson_id', numericLessonId)
+          .order('id', { ascending: true });
+
+        if (cancelled) return;
+
+        if (questionsFetchError) {
+          setQuizError('ጥያቄዎችን ማምጣት አልተቻለም።');
+          setQuiz(null);
+          setQuestions([]);
+          return;
         }
 
-        if (!quizData) {
-          const { data: latest } = await supabase
-            .from('quizzes')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          quizData = latest;
-        }
-
-        let fetchedQuestions: any[] = [];
-
-        if (quizData) {
-          const { data: questionsData } = await supabase
-            .from('quiz_questions')
-            .select('*')
-            .eq('quiz_id', quizData.id)
-            .order('id', { ascending: true });
-
-          if (questionsData && questionsData.length > 0) {
-            fetchedQuestions = questionsData.map((q: any) => ({
-              ...q,
-              options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
-            }));
-          }
-        }
-
-        if (fetchedQuestions.length === 0) {
-          fetchedQuestions = fallbackQuestionsMap[lessonNum] || fallbackQuestionsMap[1];
-          quizData = { id: 999, title: `${lesson.title} - ፈተና` };
-        }
-
-        if (!cancelled) {
+        if (!questionsData || questionsData.length === 0) {
+          setQuizError('ለዚህ ደርስ እስካሁን ምንም ጥያቄ አልተዘጋጀም');
           setQuiz(quizData);
-          setQuestions(fetchedQuestions);
+          setQuestions([]);
+          return;
         }
-      } catch (err) {
-        console.error('Quiz fetch error:', err);
-        setQuiz({ id: 999, title: `${lesson.title} - ፈተና` });
-        setQuestions(fallbackQuestionsMap[lesson.lessonNumber] || fallbackQuestionsMap[1]);
+
+        const parsedQuestions = questionsData.map((q: any) => ({
+          ...q,
+          options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
+        }));
+
+        setQuiz(quizData);
+        setQuestions(parsedQuestions);
+        setQuizError(null);
+      } catch (err: any) {
+        if (!cancelled) {
+          console.error('Quiz fetch error:', err);
+          setQuizError('አልተጠበቀ ስህተት ተከስቷል። እባክዎ ደግመው ይሞክሩ።');
+          setQuiz(null);
+          setQuestions([]);
+        }
       } finally {
         if (!cancelled) setLoadingQuiz(false);
       }
@@ -321,7 +463,7 @@ export default function LessonPage() {
   };
 
   const handleSubmitQuiz = async () => {
-    if (!questions.length || !lesson) return; // <-- extra null check
+    if (!questions.length || !lesson) return;
     const correctCount = questions.reduce((acc, q) => {
       const selected = selectedAnswers[q.id];
       return selected === q.correct_answer ? acc + 1 : acc;
@@ -338,7 +480,7 @@ export default function LessonPage() {
       const { error } = await supabase.from('quiz_attempts').insert({
         user_id: user.id,
         quiz_id: quiz?.id || 999,
-        lesson_id: lesson.id,   // safe because lesson is checked above
+        lesson_id: lesson.lessonNumber,
         score: correctCount,
         total: questions.length,
         answers: selectedAnswers,
@@ -403,7 +545,13 @@ export default function LessonPage() {
             </button>
           )}
           <div>
-            <p className="text-xs text-slate-400">{activeTab === 'lesson' ? 'ኡሱሉ ሰላሳ' : 'ፈተና'}</p>
+            <p className="text-xs text-slate-400">
+              {activeTab === 'lesson'
+                ? courseId === '2' || courseId === 'arbaeen' || courseId === 'arbain'
+                  ? 'አርባኢን ነወዊ'
+                  : 'ኡሱሉ ሰላሳ'
+                : 'ፈተና'}
+            </p>
             <h1 className="text-base font-bold text-white truncate">{lesson.title}</h1>
           </div>
         </div>
@@ -435,7 +583,7 @@ export default function LessonPage() {
         <div className="flex-1 flex flex-col min-h-0">
           {/* Image Slider */}
           <div className="flex-1 min-h-0 p-3 flex items-center justify-center">
-            {totalImages > 0 ? (
+            {totalImages > 0 && lesson.images.some(url => url.trim() !== '') ? (
               <div className="relative w-full h-full flex items-center justify-center bg-slate-900 rounded-2xl overflow-hidden border border-slate-800">
                 <img
                   src={lesson.images[currentImg]}
@@ -468,7 +616,7 @@ export default function LessonPage() {
               </div>
             )}
           </div>
-          {totalImages > 1 && (
+          {totalImages > 1 && lesson.images.some(url => url.trim() !== '') && (
             <p className="text-center text-xs text-slate-500 py-1">
               ገፅ {currentImg + 1} / {totalImages}
             </p>
@@ -489,7 +637,19 @@ export default function LessonPage() {
               </div>
             )}
 
-            {quizAvailable && (audioEnded || !lesson.audioUrl) && (
+            {loadingQuiz && (
+              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
+                ፈተናውን በመጫን ላይ...
+              </div>
+            )}
+
+            {!loadingQuiz && quizError && (
+              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
+                {quizError}
+              </div>
+            )}
+
+            {!loadingQuiz && quizAvailable && (audioEnded || !lesson.audioUrl) && (
               <button
                 type="button"
                 onClick={goToQuiz}
@@ -498,11 +658,6 @@ export default function LessonPage() {
                 <BookOpen className="h-5 w-5" />
                 ፈተናውን ጀምር
               </button>
-            )}
-            {loadingQuiz && !quizAvailable && (
-              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
-                ፈተናውን በመጫን ላይ...
-              </div>
             )}
           </div>
         </div>
