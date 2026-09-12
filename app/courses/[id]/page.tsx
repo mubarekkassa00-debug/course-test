@@ -178,7 +178,7 @@ const courses: Record<number, Course> = {
     gradient: 'from-emerald-600 to-emerald-800',
     lessonsCount: 10,
     progress: 0,
-    lessons: Array.from({ length: 10 }, (_, i) => ({
+    lessons: Array.from({ length: 7 }, (_, i) => ({
       id: `lesson-${i + 1}`,
       title: `ደርስ ${i + 1}`,
       quiz: {
@@ -222,7 +222,7 @@ const courses: Record<number, Course> = {
     gradient: 'from-red-600 to-red-800',
     lessonsCount: 14,
     progress: 0,
-    lessons: Array.from({ length: 14 }, (_, i) => ({
+    lessons: Array.from({ length: 25 }, (_, i) => ({
       id: `lesson-${i + 1}`,
       title: `ደርስ ${i + 1}`,
       quiz: {

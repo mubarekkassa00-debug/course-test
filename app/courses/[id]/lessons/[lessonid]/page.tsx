@@ -1,5 +1,17 @@
-// app/courses/[id]/lessons/[lessonId]/page.tsx
 'use client';
+// app/courses/[id]/lessons/[lessonId]/page.tsx
+//
+// FOLDER STRUCTURE (must match exactly):
+//   app/courses/[id]/lessons/[lessonId]/page.tsx
+//   └─> URL: /courses/<id>/lessons/<lessonId>
+//
+// NOTE ON NEXT.JS 15+ ASYNC PARAMS:
+//   `await params` only works in SERVER components. This file is a
+//   CLIENT component ('use client'), so we must use the `useParams()`
+//   hook, which returns the params object synchronously.
+//
+//   ✔ Client component  → useParams()          (used below)
+//   ✔ Server component  → const { id } = await params
 
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
@@ -9,13 +21,12 @@ import {
   ArrowLeft,
   Volume2,
   ImageIcon,
-  CheckCircle,
-  XCircle,
   BookOpen,
   ChevronLeft,
   ChevronRight,
   Menu,
   X,
+  Trophy,
 } from 'lucide-react';
 
 interface Lesson {
@@ -24,6 +35,29 @@ interface Lesson {
   title: string;
   images: string[];
   audioUrl: string;
+}
+
+// ---------------------------------------------------------------------------
+// Normalized option / question shapes used across ALL quiz tables
+// ---------------------------------------------------------------------------
+interface NormalizedOption {
+  label: string; // 'ሀ' | 'ለ' | 'ሐ' | 'መ' | 'A' | 'B' ...
+  text: string;  // the actual option text stored in the DB
+}
+
+interface NormalizedQuestion {
+  id: number | string;
+  question_text: string;
+  options: NormalizedOption[];
+  correctAnswerText: string; // resolved to the option *text* for uniform scoring
+  raw: any;
+}
+
+interface SavedScore {
+  score: number;
+  total: number;
+  percentage: number;
+  submittedAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +215,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691536/arbain-image_page-0005_svoclw.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691536/arbain-image_page-0006_u3nchl.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691144/arbain-01.mp3_spzu5j.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691144/arbain-01.mp3_spzu5j.mp3',
   },
   {
     id: 'arbaeen-lesson-2',
@@ -197,7 +232,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691543/arbain-image_page-0013_ujralo.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691545/arbain-image_page-0014_ddsk3f.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691150/arbain-02.mp3_mzd2x4.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691150/arbain-02.mp3_mzd2x4.mp3',
   },
   {
     id: 'arbaeen-lesson-3',
@@ -208,7 +244,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691548/arbain-image_page-0016_nwtudl.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691548/arbain-image_page-0017_wdwqnk.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691094/arbain-03.mp3_ios6v6.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691094/arbain-03.mp3_ios6v6.mp3',
   },
   {
     id: 'arbaeen-lesson-4',
@@ -219,7 +256,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691550/arbain-image_page-0019_kll7qy.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691551/arbain-image_page-0020_dleihi.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691039/arbain-04.mp3_ih6yfn.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691039/arbain-04.mp3_ih6yfn.mp3',
   },
   {
     id: 'arbaeen-lesson-5',
@@ -231,7 +269,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691556/arbain-image_page-0023_tkq3s5.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691557/arbain-image_page-0024_fu20fy.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691044/arbain-05.mp3_jbpdij.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691044/arbain-05.mp3_jbpdij.mp3',
   },
   {
     id: 'arbaeen-lesson-6',
@@ -245,7 +284,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691562/arbain-image_page-0029_ws7bnl.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691563/arbain-image_page-0030_fjbdft.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691059/arbain-06.mp3_ly19mh.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691059/arbain-06.mp3_ly19mh.mp3',
   },
   {
     id: 'arbaeen-lesson-7',
@@ -258,7 +298,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691567/arbain-image_page-0034_rnjlm7.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691568/arbain-image_page-0035_e8zw1k.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691130/arbain-07.mp3_mov7y7.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691130/arbain-07.mp3_mov7y7.mp3',
   },
   {
     id: 'arbaeen-lesson-8',
@@ -269,7 +310,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691571/arbain-image_page-0037_vfzent.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691572/arbain-image_page-0038_i0cupy.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691129/arbain-08.mp3_hqf5ej.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691129/arbain-08.mp3_hqf5ej.mp3',
   },
   {
     id: 'arbaeen-lesson-9',
@@ -282,7 +324,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691575/arbain-image_page-0042_uvg3hl.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691576/arbain-image_page-0043_cbb0lf.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691166/arbain-09.mp3_w7obpw.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691166/arbain-09.mp3_w7obpw.mp3',
   },
   {
     id: 'arbaeen-lesson-10',
@@ -295,7 +338,8 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691581/arbain-image_page-0047_upy9p5.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691582/arbain-image_page-0048_diknbn.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691168/arbain-10.mp3_vqudpf.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691168/arbain-10.mp3_vqudpf.mp3',
   },
   {
     id: 'arbaeen-lesson-11',
@@ -309,70 +353,735 @@ const lessonsArbaeen: Lesson[] = [
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691588/arbain-image_page-0053_nxcbhz.jpg',
       'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786691590/arbain-image_page-0054_vx36su.jpg',
     ],
-    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691176/arbain-11.mp3_evcigs.mp3',
+    audioUrl:
+      'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786691176/arbain-11.mp3_evcigs.mp3',
   },
 ];
 
 // ---------------------------------------------------------------------------
-// 3) ኮርሶችን በ courseId ለይቶ የሚያገኝ ካርታ
+// 3) ሹሩጡ ሶላት (Shurut as-Salat)
+// ---------------------------------------------------------------------------
+const lessonsShurut: Lesson[] = [
+  {
+    id: 'shurut-lesson-1',
+    lessonNumber: 1,
+    title: 'የሹሩጡ ሶላት ትምህርት 1',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871287/shurut-1.mp3_duizft.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874171/shurut.pdf_page-0001_mqmsvs.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874165/shurut.pdf_page-0002_goedx2.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874167/shurut.pdf_page-0003_jmdpct.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874168/shurut.pdf_page-0004_xcmacg.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874169/shurut.pdf_page-0005_meqcc2.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874171/shurut.pdf_page-0006_lv0kit.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874171/shurut.pdf_page-0007_wduadc.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874173/shurut.pdf_page-0008_wa1uia.jpg',
+    ],
+  },
+  {
+    id: 'shurut-lesson-2',
+    lessonNumber: 2,
+    title: 'የሹሩጡ ሶላት ትምህርት 2',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871299/shurut-2.mp3_xsvcyk.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874175/shurut.pdf_page-0009_ufcbg6.jpg',
+    ],
+  },
+  {
+    id: 'shurut-lesson-3',
+    lessonNumber: 3,
+    title: 'የሹሩጡ ሶላት ትምህርት 3',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871309/shurut-3.mp3_ncmsly.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874176/shurut.pdf_page-0010_fqfmvd.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874176/shurut.pdf_page-0011_ikbvry.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874177/shurut.pdf_page-0012_vx5x6j.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874178/shurut.pdf_page-0013_jwe3fq.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874180/shurut.pdf_page-0014_a0pzlf.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874181/shurut.pdf_page-0015_rcgl9x.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874181/shurut.pdf_page-0016_vtkceb.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874182/shurut.pdf_page-0017_xgel8b.jpg',
+    ],
+  },
+  {
+    id: 'shurut-lesson-4',
+    lessonNumber: 4,
+    title: 'የሹሩጡ ሶላት ትምህርት 4',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871307/shurut-4.mp3_g7v4kj.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874184/shurut.pdf_page-0018_mr5z2w.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874185/shurut.pdf_page-0019_en0bkg.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874185/shurut.pdf_page-0020_zmap8j.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874187/shurut.pdf_page-0021_svgvwo.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874188/shurut.pdf_page-0022_dktofp.jpg',
+    ],
+  },
+  {
+    id: 'shurut-lesson-5',
+    lessonNumber: 5,
+    title: 'የሹሩጡ ሶላት ትምህርት 5',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871302/shurut-5.mp3_pl7uqk.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874189/shurut.pdf_page-0023_l7iw7p.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874190/shurut.pdf_page-0024_zk6fho.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874191/shurut.pdf_page-0025_qxesg5.jpg',
+    ],
+  },
+  {
+    id: 'shurut-lesson-6',
+    lessonNumber: 6,
+    title: 'የሹሩጡ ሶላት ትምህርት 6',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871304/shurut-6.mp3_dqr6s4.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874191/shurut.pdf_page-0026_ladbau.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874194/shurut.pdf_page-0027_efyfoy.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874195/shurut.pdf_page-0028_khylvk.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874196/shurut.pdf_page-0029_okq7yi.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874196/shurut.pdf_page-0030_fzoz38.jpg',
+    ],
+  },
+  {
+    id: 'shurut-lesson-7',
+    lessonNumber: 7,
+    title: 'የሹሩጡ ሶላት ትምህርት 7',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786871327/shurut-7.mp3_u5u2jd.mp3',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874197/shurut.pdf_page-0031_mosh5o.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874197/shurut.pdf_page-0032_rpcqcr.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874198/shurut.pdf_page-0033_yjdyue.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786874203/shurut.pdf_page-0034_ucs9r8.jpg',
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 4) ኡርጁዘቱል ሚኢያህ (Urjuzetul Mi'iyah) - 25 Lessons
+// ---------------------------------------------------------------------------
+const lessonsUrjuzetul: Lesson[] = [
+  {
+    id: 'urjuzetul-lesson-1',
+    lessonNumber: 201,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 1',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967681/urjuzel-01.mp3_ecbljt.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970682/urjuzel.pdf_page-0001_jmqqum.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970683/urjuzel.pdf_page-0002_yvqlwi.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-2',
+    lessonNumber: 202,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 2',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967657/urjuzel-02.mp3_vjnqtk.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970683/urjuzel.pdf_page-0002_yvqlwi.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-3',
+    lessonNumber: 203,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 3',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967606/urjuzel-03.mp3_udd5tw.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970683/urjuzel.pdf_page-0003_zfihqo.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-4',
+    lessonNumber: 204,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 4',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967769/urjuzel-04.mp3_axwxep.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970685/urjuzel.pdf_page-0004_jfyids.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970687/urjuzel.pdf_page-0005_fk1pbg.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-5',
+    lessonNumber: 205,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 5',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967673/urjuzel-05.mp3_fjul8i.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970685/urjuzel.pdf_page-0004_jfyids.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970687/urjuzel.pdf_page-0005_fk1pbg.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-6',
+    lessonNumber: 206,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 6',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967659/urjuzel-06.mp3_hjgisa.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970687/urjuzel.pdf_page-0005_fk1pbg.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970688/urjuzel.pdf_page-0006_ylgsq5.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-7',
+    lessonNumber: 207,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 7',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967898/urjuzel-07.mp3_bcgdhm.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970688/urjuzel.pdf_page-0006_ylgsq5.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-8',
+    lessonNumber: 208,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 8',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968400/urjuzel-08.mp3_lcci7q.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970688/urjuzel.pdf_page-0006_ylgsq5.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-9',
+    lessonNumber: 209,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 9',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967914/urjuzel-09.mp3_pxwvgm.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970689/urjuzel.pdf_page-0007_bxhqsg.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-10',
+    lessonNumber: 210,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 10',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786967891/urjuzel-10.mp3_lelznm.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970690/urjuzel.pdf_page-0008_jk3bno.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-11',
+    lessonNumber: 211,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 11',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968018/urjuzel-11.mp3_hpobha.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970690/urjuzel.pdf_page-0008_jk3bno.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-12',
+    lessonNumber: 212,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 12',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968939/urjuzel-12.mp3_f7iayu.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970691/urjuzel.pdf_page-0009_cf0ozo.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970692/urjuzel.pdf_page-0010_rafjse.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-13',
+    lessonNumber: 213,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 13',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968937/urjuzel-13.mp3_zp8hmr.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970691/urjuzel.pdf_page-0009_cf0ozo.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970692/urjuzel.pdf_page-0010_rafjse.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-14',
+    lessonNumber: 214,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 14',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968936/urjuzel-14.mp3_ke8jmo.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970692/urjuzel.pdf_page-0010_rafjse.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970694/urjuzel.pdf_page-0011_au7g4v.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-15',
+    lessonNumber: 215,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 15',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968955/urjuzel-15.mp3_bp31n8.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970696/urjuzel.pdf_page-0012_wsguul.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-16',
+    lessonNumber: 216,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 16',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968997/urjuzel-16.mp3_de1eh1.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970696/urjuzel.pdf_page-0012_wsguul.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-17',
+    lessonNumber: 217,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 17',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786969027/urjuzel-17.mp3_n3ekeg.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970696/urjuzel.pdf_page-0012_wsguul.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970697/urjuzel.pdf_page-0013_en9aks.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-18',
+    lessonNumber: 218,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 18',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786969974/urjuzel-18.mp3_d2mkys.mp4',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970698/urjuzel.pdf_page-0014_nuzaea.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-19',
+    lessonNumber: 219,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 19',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786969942/urjuzel-19.mp3_e1ego9.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970698/urjuzel.pdf_page-0014_nuzaea.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970700/urjuzel.pdf_page-0015_exsdfv.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-20',
+    lessonNumber: 220,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 20',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968865/urjuzel-20.mp3_gv0sre.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970700/urjuzel.pdf_page-0015_exsdfv.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-21',
+    lessonNumber: 221,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 21',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968576/urjuzel-21.mp3_v5drwo.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970701/urjuzel.pdf_page-0016_zfk1ay.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-22',
+    lessonNumber: 222,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 22',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968996/urjuzel-22.mp3_wyxdin.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970701/urjuzel.pdf_page-0016_zfk1ay.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970702/urjuzel.pdf_page-0017_ru0v7l.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-23',
+    lessonNumber: 223,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 23',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968501/urjuzel-23.mp3_d4dhwb.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970703/urjuzel.pdf_page-0018_ho2fsv.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-24',
+    lessonNumber: 224,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 24',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968594/urjuzel-24.mp3_r0mv82.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970703/urjuzel.pdf_page-0018_ho2fsv.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970704/urjuzel.pdf_page-0019_fh96fd.jpg',
+    ],
+  },
+  {
+    id: 'urjuzetul-lesson-25',
+    lessonNumber: 225,
+    title: 'ኡርጁዘቱል ሚኢያህ - ደርስ 25',
+    audioUrl: 'https://res.cloudinary.com/bhtqs2j6/video/upload/v1786968601/urjuzel-25.mp3_pvhatg.3gp',
+    images: [
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970704/urjuzel.pdf_page-0019_fh96fd.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970706/urjuzel.pdf_page-0020_mcgpq2.jpg',
+      'https://res.cloudinary.com/bhtqs2j6/image/upload/v1786970707/urjuzel.pdf_page-0021_iwxn7y.jpg',
+    ],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// 5) ኮርሶችን በ courseId ለይቶ የሚያገኝ ካርታ
 // ---------------------------------------------------------------------------
 const courseLessonsMap: Record<string, Lesson[]> = {
   '1': lessons,
   '2': lessonsArbaeen,
+  '3': lessonsShurut,
+  '4': lessonsUrjuzetul,
   'usul': lessons,
   'arbaeen': lessonsArbaeen,
   'arbain': lessonsArbaeen,
+  'shurut': lessonsShurut,
+  'shurut-salat': lessonsShurut,
+  'urjuzetul': lessonsUrjuzetul,
+  'urjizetul': lessonsUrjuzetul,
+  'urjuzetul-miiyah': lessonsUrjuzetul,
 };
+
+function resolveCourseId(courseId?: string): number | null {
+  const normalized = (courseId || '').toLowerCase().trim();
+
+  const slugToCourseId: Record<string, number> = {
+    '1': 1,
+    '2': 2,
+    '3': 3,
+    '4': 4,
+    'usul': 1,
+    'arbaeen': 2,
+    'arbain': 2,
+    'shurut': 3,
+    'shurut-salat': 3,
+    'urjuzetul': 4,
+    'urjizetul': 4,
+    'urjuzetul-miiyah': 4,
+  };
+
+  if (slugToCourseId[normalized] !== undefined) {
+    return slugToCourseId[normalized];
+  }
+
+  const numeric = Number(normalized);
+  return Number.isInteger(numeric) ? numeric : null;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic quiz table resolver (matches updated Supabase table configuration)
+//
+//   Course 1 (Usul Al-Thalatha)   -> usul_al_thalatha_quiz
+//   Course 2 (Arbain An-Nawawi)   -> arbain_quiz
+//   Course 3 (Shurut As-Salah)    -> shurut_as_salah_quiz
+//   Course 4 (Urjuzetul Mi'iyah)  -> questions
+// ---------------------------------------------------------------------------
+function getQuizTableName(courseId: number): string | null {
+  switch (courseId) {
+    case 1:
+      return 'usul_al_thalatha_quiz';
+    case 2:
+      return 'arbain_quiz';
+    case 3:
+      return 'shurut_as_salah_quiz';
+    case 4:
+      return 'questions';
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Column-name resolver.
+//
+//   The `questions` table (Urjuzetul Mi'iyah / generic questions) stores
+//   the lesson identifier in a column called `lesson_id`.
+//
+//   The other tables (usul_al_thalatha_quiz, arbain_quiz,
+//   shurut_as_salah_quiz) store the lesson identifier in `lesson_number`.
+// ---------------------------------------------------------------------------
+function getLessonColumnName(tableName: string): 'lesson_id' | 'lesson_number' {
+  if (tableName === 'questions') {
+    return 'lesson_id';
+  }
+  return 'lesson_number';
+}
+
+// ---------------------------------------------------------------------------
+// Strict integer parser for lesson_number / lesson_id.
+//
+//   currentLessonId = 'shurut-lesson-1'  →  1
+//   currentLessonId = 'urjuzetul-lesson-5' →  5
+//   lesson.lessonNumber = 101            →  1   (Arbain offset)
+//   lesson.lessonNumber = 201            →  1   (Urjuzetul offset)
+// ---------------------------------------------------------------------------
+function parseLessonNumber(
+  lessonNumberFromList: number | undefined | null,
+  currentLessonId: string | undefined | null
+): number {
+  if (
+    lessonNumberFromList !== undefined &&
+    lessonNumberFromList !== null &&
+    !isNaN(Number(lessonNumberFromList))
+  ) {
+    const raw = Math.trunc(Number(lessonNumberFromList));
+    const normalized = raw > 100 ? raw % 100 : raw;
+    if (normalized >= 1) return normalized;
+  }
+
+  const digits = (currentLessonId || '').match(/\d+/g);
+  if (digits && digits.length > 0) {
+    const raw = parseInt(digits[digits.length - 1], 10);
+    const normalized = raw > 100 ? raw % 100 : raw;
+    if (normalized >= 1) return normalized;
+  }
+
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
+// UNIVERSAL OPTION PARSING
+//
+// Handles BOTH schemas used across our courses:
+//
+//   A) Standard tables (arbain_quiz, shurut_as_salah_quiz, etc.):
+//        → one `options` JSON/Array column
+//
+//   B) The `questions` table (Urjuzetul Mi'iyah):
+//        → discrete columns option_a / option_b / option_c / option_d
+//        → correct_answer stores an Amharic letter ('ሀ', 'ለ', 'ሐ', 'መ')
+// ---------------------------------------------------------------------------
+const AMHARIC_LABELS = ['ሀ', 'ለ', 'ሐ', 'መ'];
+
+// Helper to safely parse an `options` column when it's a JSON string or array
+function parseOptions(options: any): string[] {
+  if (Array.isArray(options)) return options;
+  if (typeof options === 'string') {
+    try {
+      const parsed = JSON.parse(options);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+// Build normalized options from discrete option_a..option_d columns
+function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
+  const rawValues = [item.option_a, item.option_b, item.option_c, item.option_d];
+  const result: NormalizedOption[] = [];
+
+  rawValues.forEach((value, index) => {
+    if (value === null || value === undefined) return;
+    const text = String(value).trim();
+    if (text === '') return;
+
+    result.push({
+      label: AMHARIC_LABELS[index] ?? String.fromCharCode(65 + index), // fallback A/B/C...
+      text,
+    });
+  });
+
+  return result;
+}
+
+// Build normalized options from an `options` array/JSON column
+function buildOptionsFromArray(item: any): NormalizedOption[] {
+  const arr = parseOptions(item.options);
+  return arr
+    .filter((v) => v !== null && v !== undefined && String(v).trim() !== '')
+    .map((value, index) => ({
+      label: AMHARIC_LABELS[index] ?? String.fromCharCode(65 + index),
+      text: String(value),
+    }));
+}
+
+// Normalize one raw row coming from Supabase into a uniform shape
+function normalizeQuestion(item: any): NormalizedQuestion {
+  const hasDiscreteColumns =
+    item.option_a !== undefined ||
+    item.option_b !== undefined ||
+    item.option_c !== undefined ||
+    item.option_d !== undefined;
+
+  const options = hasDiscreteColumns
+    ? buildOptionsFromDiscreteColumns(item)
+    : buildOptionsFromArray(item);
+
+  const rawCorrect =
+    item.correct_answer === null || item.correct_answer === undefined
+      ? ''
+      : String(item.correct_answer).trim();
+
+  let correctAnswerText = rawCorrect;
+
+  // If `correct_answer` is an Amharic letter, resolve it to the option text
+  // so scoring works uniformly across all course tables.
+  const byLabel = options.find((opt) => opt.label === rawCorrect);
+  if (byLabel) {
+    correctAnswerText = byLabel.text;
+  }
+
+  return {
+    id: item.id ?? item.question_id ?? Math.random().toString(36).slice(2),
+    question_text: item.question_text ?? item.question ?? '',
+    options,
+    correctAnswerText,
+    raw: item,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Score persistence helpers (localStorage-backed)
+// ---------------------------------------------------------------------------
+const SCORE_STORAGE_KEY = 'quiz_scores_v1';
+
+function loadAllScores(): Record<string, SavedScore> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(SCORE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAllScores(scores: Record<string, SavedScore>) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(scores));
+  } catch {
+    /* ignore quota errors */
+  }
+}
 
 export default function LessonPage() {
   const params = useParams();
 
-  const courseId = params?.id as string;
-  const currentLessonId = (params?.lessonId || params?.lessonid) as string;
+  // ------------------------------------------------------------------
+  // PARAM RESOLUTION (client component → useParams, synchronous)
+  // Reads every possible folder-name variant so the code works whether
+  // the folders are named [id]/[lessonId], [courseId]/[lessonid], etc.
+  // ------------------------------------------------------------------
+  const rawCourseId =
+    (params as any)?.courseId ??
+    (params as any)?.id ??
+    (params as any)?.courseid ??
+    (params as any)?.courseID;
 
-  // Select correct lesson array by courseId
+  const rawLessonId =
+    (params as any)?.lessonId ??
+    (params as any)?.lessonid ??
+    (params as any)?.lessonID ??
+    (params as any)?.lesson;
+
+  const courseId = decodeURIComponent(
+    String(Array.isArray(rawCourseId) ? rawCourseId[0] : rawCourseId || '')
+  )
+    .toLowerCase()
+    .trim();
+
+  const currentLessonId = decodeURIComponent(
+    String(Array.isArray(rawLessonId) ? rawLessonId[0] : rawLessonId || '')
+  )
+    .toLowerCase()
+    .trim();
+
   const courseLessons =
-    courseLessonsMap[courseId] || [...lessons, ...lessonsArbaeen];
+    courseLessonsMap[courseId] ||
+    [...lessons, ...lessonsArbaeen, ...lessonsShurut, ...lessonsUrjuzetul];
 
-  // Extract number from slug like "lesson-8" or "arbaeen-lesson-8" → 8
-  const slugNumberMatch = currentLessonId.match(/(\d+)$/);
+  const slugNumberMatch = currentLessonId?.match(/(\d+)$/);
   const slugLessonNumber = slugNumberMatch
     ? parseInt(slugNumberMatch[1], 10)
     : null;
 
-  // Find lesson by local number (1–11) or exact ID
   const currentIndex = courseLessons.findIndex((l) => {
     const localNumber = l.lessonNumber % 100;
     if (slugLessonNumber !== null && localNumber === slugLessonNumber) {
       return true;
     }
-    return l.id === currentLessonId;
+    return l.id.toLowerCase() === currentLessonId;
   });
 
   const lesson = currentIndex !== -1 ? courseLessons[currentIndex] : null;
 
+  const [hasMounted, setHasMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<'lesson' | 'quiz'>('lesson');
   const [currentImg, setCurrentImg] = useState(0);
-  const [audioEnded, setAudioEnded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  // ------------------------------------------------------------------
+  // REQUIREMENT #1: strict audio finish lock.
+  // `isAudioFinished` starts false on every mount and every lesson
+  // change, and is ONLY flipped to true by the real `onEnded` event
+  // (see `handleAudioEnded`). This prevents the "ፈተናውን ጀምር" button
+  // from appearing prematurely at 0:00.
+  // ------------------------------------------------------------------
+  const [isAudioFinished, setIsAudioFinished] = useState(false);
+  const [isQuizUnlocked, setIsQuizUnlocked] = useState(false);
+
   const [quiz, setQuiz] = useState<any>(null);
-  const [questions, setQuestions] = useState<any[]>([]);
+  const [questions, setQuestions] = useState<NormalizedQuestion[]>([]);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
+  const [submittingQuiz, setSubmittingQuiz] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
-  // Reset on lesson change
+  // Persistent per-lesson scores (localStorage + state mirror)
+  const [savedScores, setSavedScores] = useState<Record<string, SavedScore>>({});
+
+  // Mark component as mounted to avoid hydration mismatch and state update before mount
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
+  // Hydrate saved scores from localStorage (client-only)
+  useEffect(() => {
+    setSavedScores(loadAllScores());
+  }, []);
+
+  // Persist helper — writes to localStorage and updates in-memory state
+  const persistScore = (
+    lessonKey: string,
+    correct: number,
+    total: number
+  ): SavedScore => {
+    const percentage = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const entry: SavedScore = {
+      score: correct,
+      total,
+      percentage,
+      submittedAt: new Date().toISOString(),
+    };
+    setSavedScores((prev) => {
+      const next = { ...prev, [lessonKey]: entry };
+      writeAllScores(next);
+      return next;
+    });
+    return entry;
+  };
+
+  // ------------------------------------------------------------------
+  // REQUIREMENT #2: reset on lesson change.
+  // Navigating between lessons hard-resets the audio finish lock so
+  // the Start Quiz button is hidden again until the new lesson's
+  // audio actually finishes.
+  // ------------------------------------------------------------------
   useEffect(() => {
     setCurrentImg(0);
-    setAudioEnded(false);
+    setIsAudioFinished(false);
+    setIsQuizUnlocked(false);
+    setActiveTab('lesson');
+    setQuizSubmitted(false);
+    setScore(null);
+    setSelectedAnswers({});
+    setCurrentStep(0);
   }, [lesson]);
 
-  // Fetch quiz + questions
+  // ------------------------------------------------------------------
+  // NOTE: The previous localStorage auto-unlock effect has been
+  // intentionally REMOVED. It was the primary cause of the premature
+  // button display (once a user finished a lesson once, the unlock flag
+  // persisted and would show the button at 0:00 on every later visit).
+  // The unlock is now purely session-scoped and strictly gated on the
+  // `onEnded` event.
+  // ------------------------------------------------------------------
+
+  // ------------------------------------------------------------------
+  // Fetch quiz questions from the correct dynamic table.
+  //
+  //   For table = 'questions'          → filter column = 'lesson_id'
+  //   For all other tables             → filter column = 'lesson_number'
+  //
+  //   Final example for Urjuzetul Mi'iyah lesson 1:
+  //     supabase
+  //       .from('questions')
+  //       .select('*')
+  //       .eq('lesson_id', 1)
+  // ------------------------------------------------------------------
   useEffect(() => {
     if (!lesson) return;
     let cancelled = false;
@@ -383,128 +1092,76 @@ export default function LessonPage() {
       setQuizSubmitted(false);
       setScore(null);
       setSelectedAnswers({});
-      setActiveTab('lesson');
       setCurrentStep(0);
 
       try {
-        const localLessonNumber = lesson.lessonNumber % 100;
+        const numericCourseId = resolveCourseId(courseId);
 
-        // Course-based title pattern
-        let courseTitlePattern = '%ኡሱሉ%';
-        if (
-          courseId === '2' ||
-          courseId === 'arbaeen' ||
-          courseId === 'arbain'
-        ) {
-          courseTitlePattern = '%አርባኢን%';
-        }
-
-        // 1. Fetch quiz
-        let quizData: any = null;
-        const { data: quizDataResponse, error: quizFetchError } = await supabase
-          .from('quizzes')
-          .select('*')
-          .eq('lesson_id', localLessonNumber)
-          .ilike('title', courseTitlePattern)
-          .maybeSingle();
-
-        quizData = quizDataResponse;
-
-        if (cancelled) return;
-
-        if (quizFetchError) {
-          setQuizError('ፈተናውን ማምጣት አልተቻለም። እባክዎ ደግመው ይሞክሩ።');
+        if (numericCourseId === null) {
+          console.error('Unable to resolve course id:', courseId);
+          setQuizError('ኮርሱን መለየት አልተቻለም።');
           setQuiz(null);
           setQuestions([]);
           return;
         }
 
-        // Fallback: lesson_id only
-        if (!quizData) {
-          const { data: fallbackQuiz, error: fallbackQuizError } = await supabase
-            .from('quizzes')
-            .select('*')
-            .eq('lesson_id', localLessonNumber)
-            .maybeSingle();
-
-          if (cancelled) return;
-
-          if (fallbackQuizError) {
-            setQuizError('ፈተናውን ማምጣት አልተቻለም። እባክዎ ደግመው ይሞክሩ።');
-            setQuiz(null);
-            setQuestions([]);
-            return;
-          }
-          quizData = fallbackQuiz;
+        const tableName = getQuizTableName(numericCourseId);
+        if (!tableName) {
+          setQuizError('ለዚህ ኮርስ የፈተና ጥያቄዎች አልተዘጋጁም');
+          setQuiz(null);
+          setQuestions([]);
+          return;
         }
 
-        let questionsData: any[] = [];
+        // Resolve the correct column name for this table
+        const lessonColumn = getLessonColumnName(tableName);
 
-        // 2. Questions by quiz_id
-        if (quizData) {
-          const { data: questionsByQuiz, error: questionsByQuizError } = await supabase
-            .from('quiz_questions')
-            .select('*')
-            .eq('quiz_id', quizData.id)
-            .order('id', { ascending: true });
+        // Parse the lesson identifier as an integer
+        const targetLessonNumber = parseLessonNumber(
+          lesson?.lessonNumber,
+          currentLessonId
+        );
 
-          if (cancelled) return;
+        console.log(
+          `Fetching quiz | table=${tableName} | column=${lessonColumn} | value=${targetLessonNumber}`
+        );
 
-          if (questionsByQuizError) {
-            setQuizError('ጥያቄዎችን ማምጣት አልተቻለም።');
-            setQuiz(null);
-            setQuestions([]);
-            return;
-          }
+        const { data: questionsData, error: questionsError } = await supabase
+          .from(tableName)
+          .select('*')
+          .eq(lessonColumn, targetLessonNumber)
+          .order('id', { ascending: true });
 
-          questionsData = questionsByQuiz || [];
-        }
-
-        // 3. Fallback: questions by lesson_id
-        if (!questionsData || questionsData.length === 0) {
-          const { data: questionsByLesson, error: questionsByLessonError } = await supabase
-            .from('quiz_questions')
-            .select('*')
-            .eq('lesson_id', localLessonNumber)
-            .order('id', { ascending: true });
-
-          if (cancelled) return;
-
-          if (questionsByLessonError) {
-            setQuizError('ጥያቄዎችን ማምጣት አልተቻለም።');
-            setQuiz(null);
-            setQuestions([]);
-            return;
-          }
-
-          questionsData = questionsByLesson || [];
+        if (questionsError) {
+          console.error(
+            `Fetch questions error from ${tableName}:`,
+            JSON.stringify(questionsError, null, 2)
+          );
+          setQuizError('ጥያቄዎችን ማምጣት አልተቻለም።');
+          setQuiz(null);
+          setQuestions([]);
+          return;
         }
 
         if (!questionsData || questionsData.length === 0) {
           setQuizError('ለዚህ ደርስ እስካሁን ምንም ጥያቄ አልተዘጋጀም');
-          setQuiz(quizData);
+          setQuiz(null);
           setQuestions([]);
           return;
         }
 
-        const parsedQuestions = questionsData.map((q: any) => ({
-          ...q,
-          options:
-            typeof q.options === 'string' ? JSON.parse(q.options) : q.options,
-        }));
+        // Universal normalization — works for both schema variants
+        const parsedQuestions: NormalizedQuestion[] =
+          questionsData.map(normalizeQuestion);
 
-        setQuiz(
-          quizData || { id: null, title: `የደርስ ${lesson.lessonNumber} ፈተና` }
-        );
+        setQuiz(null);
         setQuestions(parsedQuestions);
         setQuizError(null);
       } catch (err: any) {
-        if (!cancelled) {
-          console.error('Quiz fetch error:', err);
-          setQuizError('አልተጠበቀ ስህተት ተከስቷል። እባክዎ ደግመው ይሞክሩ።');
-          setQuiz(null);
-          setQuestions([]);
-        }
+        console.error('Quiz fetch error (outer):', err);
+        setQuizError('አልተጠበቀ ስህተት ተከስቷል። እባክዎ ደግመው ይሞክሩ።');
+        setQuiz(null);
+        setQuestions([]);
       } finally {
         if (!cancelled) setLoadingQuiz(false);
       }
@@ -514,35 +1171,67 @@ export default function LessonPage() {
     return () => {
       cancelled = true;
     };
-  }, [lesson, courseId]);
+  }, [lesson, courseId, currentLessonId, retryKey]);
 
-  // Audio ended event
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !lesson?.audioUrl) return;
+  // ------------------------------------------------------------------
+  // handleAudioEnded: fired ONLY by the <audio> element's real `onEnded`.
+  // - Sets the strict audio finish lock (requirement #1)
+  // - Unlocks the quiz and auto-switches to the quiz tab
+  // - Bumps retryKey so the fetch effect re-runs with fresh questions
+  // ------------------------------------------------------------------
+  const handleAudioEnded = () => {
+    if (isAudioFinished) return; // idempotent
+    console.log('Audio completed → unlocking + auto-starting quiz...');
+    setIsAudioFinished(true);
+    setIsQuizUnlocked(true);
+    setActiveTab('quiz');
+    setRetryKey((prev) => prev + 1);
+  };
 
-    const handleEnded = () => setAudioEnded(true);
-    audio.addEventListener('ended', handleEnded);
-    if (audio.ended) setAudioEnded(true);
+  // ------------------------------------------------------------------
+  // Fallback safety net for browsers that don't reliably fire `ended`.
+  // Hardened so it can NEVER fire prematurely at 0:00:
+  //   - duration must be a finite positive number > 1 second
+  //   - currentTime must be > 0.5s
+  //   - currentTime must be within 0.5s of the end
+  // ------------------------------------------------------------------
+  const handleAudioTimeUpdate = (e: React.SyntheticEvent<HTMLAudioElement>) => {
+    const audio = e.currentTarget;
+    if (
+      Number.isFinite(audio.duration) &&
+      audio.duration > 1 &&
+      audio.currentTime > 0.5 &&
+      audio.currentTime >= audio.duration - 0.5
+    ) {
+      handleAudioEnded();
+    }
+  };
 
-    return () => audio.removeEventListener('ended', handleEnded);
-  }, [lesson?.audioUrl]);
-
-  const handleOptionSelect = (questionId: number, optionText: string) => {
-    if (quizSubmitted) return;
-    setSelectedAnswers((prev) => ({ ...prev, [questionId]: optionText }));
+  const handleOptionSelect = (
+    questionId: string | number,
+    optionText: string
+  ) => {
+    if (quizSubmitted || submittingQuiz) return;
+    setSelectedAnswers((prev) => ({ ...prev, [String(questionId)]: optionText }));
   };
 
   const handleSubmitQuiz = async () => {
-    if (!questions.length || !lesson) return;
+    if (!questions.length || !lesson || submittingQuiz) return;
+
+    setSubmittingQuiz(true);
 
     const correctCount = questions.reduce((acc, q) => {
-      const selected = selectedAnswers[q.id];
-      return selected === q.correct_answer ? acc + 1 : acc;
+      const selected = selectedAnswers[String(q.id)];
+      return selected && selected === q.correctAnswerText ? acc + 1 : acc;
     }, 0);
 
     setScore(correctCount);
     setQuizSubmitted(true);
+
+    // Persist score locally (instant + survives reload) AND attempt
+    // to store server-side in quiz_attempts.
+    const lessonKey = lesson.id || currentLessonId || String(lesson.lessonNumber);
+    persistScore(lessonKey, correctCount, questions.length);
 
     try {
       const {
@@ -550,7 +1239,9 @@ export default function LessonPage() {
       } = await supabase.auth.getUser();
 
       if (!user) {
-        alert('የተጠቃሚ መለያ አልተገኘም። እባክዎ ደግመው ይሞክሩ።');
+        // Not signed in → keep the locally-saved score, don't block the user.
+        console.warn('No auth user; score saved locally only.');
+        setSubmittingQuiz(false);
         return;
       }
 
@@ -565,18 +1256,24 @@ export default function LessonPage() {
       });
 
       if (error) {
-        alert('የመላክ ስህተት፦ ' + error.message);
-      } else {
-        alert('ውጤትህ በትክክል ተመዝግቧል!');
+        console.error('quiz_attempts insert error:', error);
+        // Score is still saved locally, so we don't block the user.
       }
     } catch (e: any) {
-      console.error('Failed to save quiz result', e);
-      alert('የመላክ ስህተት፦ ' + (e.message || 'Unknown error'));
+      console.error('Failed to save quiz result to server:', e);
+    } finally {
+      setSubmittingQuiz(false);
     }
   };
 
-  const goToQuiz = () => setActiveTab('quiz');
+  const goToQuiz = () => {
+    // Strict gate: quiz tab can only be entered when the audio has finished.
+    if (isAudioFinished && isQuizUnlocked) {
+      setActiveTab('quiz');
+    }
+  };
   const goToLesson = () => setActiveTab('lesson');
+  const retryFetch = () => setRetryKey((prev) => prev + 1);
 
   const nextImage = () =>
     lesson &&
@@ -585,7 +1282,14 @@ export default function LessonPage() {
   const prevImage = () =>
     lesson && setCurrentImg((prev) => Math.max(prev - 1, 0));
 
+  // Strict question navigation guard.
+  const currentQuestion = questions[currentStep];
+  const currentQuestionId = currentQuestion ? String(currentQuestion.id) : '';
+  const hasAnsweredCurrent =
+    !!currentQuestionId && !!selectedAnswers[currentQuestionId];
+
   const nextStep = () => {
+    if (!hasAnsweredCurrent) return; // hard guard
     if (currentStep < questions.length - 1) {
       setCurrentStep((prev) => prev + 1);
     } else {
@@ -596,6 +1300,10 @@ export default function LessonPage() {
   const prevStep = () => {
     if (currentStep > 0) setCurrentStep((prev) => prev - 1);
   };
+
+  if (!hasMounted) {
+    return null;
+  }
 
   if (!lesson) {
     return (
@@ -620,15 +1328,19 @@ export default function LessonPage() {
   const quizAvailable = questions.length > 0;
   const totalImages = lesson.images.length;
 
+  // Header score badge lookup.
+  const savedScoreForLesson: SavedScore | undefined =
+    savedScores[lesson.id] || savedScores[currentLessonId];
+
   return (
     <div className="h-screen max-h-[100dvh] flex flex-col overflow-hidden bg-slate-950 text-slate-100">
       {/* Header */}
       <header className="flex-shrink-0 bg-slate-900 border-b border-slate-800 p-3 flex items-center justify-between relative z-30">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           {activeTab === 'lesson' ? (
             <Link
               href={`/courses/${courseId}`}
-              className="p-2 bg-slate-800 rounded-lg active:bg-slate-700"
+              className="p-2 bg-slate-800 rounded-lg active:bg-slate-700 shrink-0"
             >
               <ArrowLeft className="h-5 w-5 text-slate-300" />
             </Link>
@@ -636,29 +1348,48 @@ export default function LessonPage() {
             <button
               type="button"
               onClick={goToLesson}
-              className="p-2 bg-slate-800 rounded-lg active:bg-slate-700"
+              className="p-2 bg-slate-800 rounded-lg active:bg-slate-700 shrink-0"
             >
               <ArrowLeft className="h-5 w-5 text-slate-300" />
             </button>
           )}
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-xs text-slate-400">
               {activeTab === 'lesson'
                 ? courseId === '2' ||
                   courseId === 'arbaeen' ||
                   courseId === 'arbain'
                   ? 'አርባኢን ነወዊ'
+                  : courseId === '3' ||
+                    courseId === 'shurut' ||
+                    courseId === 'shurut-salat'
+                  ? 'ሹሩጡ ሶላት'
+                  : courseId === '4' ||
+                    courseId === 'urjuzetul' ||
+                    courseId === 'urjizetul' ||
+                    courseId === 'urjuzetul-miiyah'
+                  ? 'ኡርጁዘቱል ሚኢያህ'
                   : 'ኡሱሉ ሰላሳ'
                 : 'ፈተና'}
             </p>
             <h1 className="text-base font-bold text-white truncate">
               {lesson.title}
             </h1>
+            {/* Show achieved score inline on the header */}
+            {savedScoreForLesson && (
+              <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-[11px] font-medium">
+                <Trophy className="h-3 w-3" />
+                ውጤት፡ {savedScoreForLesson.score}/{savedScoreForLesson.total}
+                <span className="text-emerald-500/80">
+                  ({savedScoreForLesson.percentage}%)
+                </span>
+              </div>
+            )}
           </div>
         </div>
         <button
           onClick={() => setMenuOpen(!menuOpen)}
-          className="p-2 bg-slate-800 rounded-lg active:bg-slate-700"
+          className="p-2 bg-slate-800 rounded-lg active:bg-slate-700 shrink-0"
         >
           {menuOpen ? (
             <X className="h-5 w-5 text-slate-300" />
@@ -745,6 +1476,13 @@ export default function LessonPage() {
                   className="w-full rounded-lg"
                   src={lesson.audioUrl}
                   preload="metadata"
+                  // REQUIREMENT #1: this is the ONLY real trigger that
+                  // flips `isAudioFinished` to true.
+                  onEnded={() => {
+                    setIsAudioFinished(true);
+                    handleAudioEnded();
+                  }}
+                  onTimeUpdate={handleAudioTimeUpdate}
                 >
                   Your browser does not support the audio element.
                 </audio>
@@ -758,26 +1496,65 @@ export default function LessonPage() {
 
             {loadingQuiz && (
               <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
-                ፈተናውን በመጫን ላይ...
+                ጥያቄዎች በመጫን ላይ ናቸው...
               </div>
             )}
 
             {!loadingQuiz && quizError && (
               <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
                 {quizError}
+                <button
+                  onClick={retryFetch}
+                  className="mt-2 inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+                >
+                  እንደገና ሞክር
+                </button>
               </div>
             )}
 
-            {!loadingQuiz && quizAvailable && (audioEnded || !lesson.audioUrl) && (
-              <button
-                type="button"
-                onClick={goToQuiz}
-                className="w-full py-3 bg-emerald-600 active:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
-              >
-                <BookOpen className="h-5 w-5" />
-                ፈተናውን ጀምር
-              </button>
+            {!loadingQuiz && !quizError && !quizAvailable && (
+              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
+                ለዚህ ትምህርት ምንም ጥያቄ አልተገኘም።
+                <button
+                  onClick={retryFetch}
+                  className="mt-2 inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+                >
+                  እንደገና ሞክር
+                </button>
+              </div>
             )}
+
+            {/*
+              REQUIREMENT #1 & #2: The Start Quiz button renders ONLY when
+              the audio has actually finished. `isAudioFinished` resets to
+              false on every lesson change so the button is always hidden
+              after navigation/refresh.
+            */}
+            {!loadingQuiz &&
+              quizAvailable &&
+              (isAudioFinished || !lesson.audioUrl) && (
+                <button
+                  type="button"
+                  onClick={goToQuiz}
+                  className="w-full py-3 bg-emerald-600 active:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <BookOpen className="h-5 w-5" />
+                  ፈተናውን ጀምር
+                </button>
+              )}
+
+            {/*
+              Optional hint so the user knows what to do while listening.
+              Hidden as soon as the audio finishes.
+            */}
+            {!loadingQuiz &&
+              quizAvailable &&
+              lesson.audioUrl &&
+              !isAudioFinished && (
+                <p className="text-xs text-slate-500 text-center">
+                  ፈተናውን ለመጀመር ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
+                </p>
+              )}
           </div>
         </div>
       ) : (
@@ -791,86 +1568,155 @@ export default function LessonPage() {
             <ArrowLeft className="h-4 w-4" /> ወደ ደርሱ ተመለስ
           </button>
 
-          <h3 className="text-lg font-bold text-white mb-4">
-            {quiz?.title || 'የደርሱ ፈተና'}
-          </h3>
-
-          {!quizSubmitted ? (
-            <>
-              <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-1 min-h-0 overflow-auto">
-                <p className="text-sm font-medium text-white mb-3">
-                  {currentStep + 1}. {questions[currentStep].question_text}
-                </p>
-                <div className="space-y-2">
-                  {questions[currentStep].options.map(
-                    (opt: string, optIdx: number) => {
-                      const isSelected =
-                        selectedAnswers[questions[currentStep].id] === opt;
-                      return (
-                        <button
-                          key={optIdx}
-                          type="button"
-                          onClick={() =>
-                            handleOptionSelect(
-                              questions[currentStep].id,
-                              opt
-                            )
-                          }
-                          className={`w-full text-left p-3 rounded-xl border text-sm transition-colors ${
-                            isSelected
-                              ? 'border-emerald-500 bg-emerald-950 text-emerald-300'
-                              : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'
-                          }`}
-                        >
-                          {opt}
-                        </button>
-                      );
-                    }
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 mt-3">
-                <button
-                  type="button"
-                  onClick={prevStep}
-                  disabled={currentStep === 0}
-                  className="flex-1 py-3 rounded-xl bg-slate-800 text-white font-medium disabled:opacity-40"
-                >
-                  ወደ ኋላ
-                </button>
-                {currentStep < questions.length - 1 ? (
-                  <button
-                    type="button"
-                    onClick={nextStep}
-                    className="flex-1 py-3 rounded-xl bg-slate-800 text-white font-medium"
-                  >
-                    ቀጣይ
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleSubmitQuiz}
-                    className="flex-1 py-3 rounded-xl bg-emerald-600 text-white font-bold"
-                  >
-                    አስረክብ
-                  </button>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
-              <p className="text-emerald-400 font-bold text-lg">
-                ውጤት፡ {score}/{questions.length}
+          {!isQuizUnlocked ? (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-slate-400 text-center px-6">
+                ፈተናውን ለመውሰድ እባክዎ ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
               </p>
+            </div>
+          ) : loadingQuiz ? (
+            <div className="text-center py-8 text-slate-400">
+              ጥያቄዎች በመጫን ላይ ናቸው...
+            </div>
+          ) : quizError ? (
+            <div className="text-center py-8 text-slate-400">
+              {quizError}
               <button
-                type="button"
-                onClick={goToLesson}
-                className="w-full py-3 bg-slate-800 active:bg-slate-700 text-white rounded-xl"
+                onClick={retryFetch}
+                className="mt-3 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
               >
-                ወደ ደርሱ ተመለስ
+                እንደገና ሞክር
               </button>
             </div>
+          ) : !quizAvailable ? (
+            <div className="text-center py-8 text-slate-400">
+              ለዚህ ትምህርት ምንም ጥያቄ አልተገኘም።
+              <button
+                onClick={retryFetch}
+                className="mt-3 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+              >
+                እንደገና ሞክር
+              </button>
+            </div>
+          ) : (
+            <>
+              <h3 className="text-lg font-bold text-white mb-1">
+                {quiz?.title || 'የደርሱ ፈተና'}
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                ጥያቄ {currentStep + 1} / {questions.length}
+              </p>
+
+              {!quizSubmitted ? (
+                <>
+                  <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-1 min-h-0 overflow-auto">
+                    <p className="text-sm font-medium text-white mb-3">
+                      {currentStep + 1}. {currentQuestion?.question_text}
+                    </p>
+                    <div className="space-y-2">
+                      {currentQuestion?.options.map(
+                        (opt, optIdx: number) => {
+                          const isSelected =
+                            selectedAnswers[currentQuestionId] === opt.text;
+                          return (
+                            <button
+                              key={`${currentQuestionId}-${optIdx}`}
+                              type="button"
+                              onClick={() =>
+                                handleOptionSelect(
+                                  currentQuestion.id,
+                                  opt.text
+                                )
+                              }
+                              disabled={submittingQuiz}
+                              className={`w-full text-left p-3 rounded-xl border text-sm transition-colors flex items-start gap-2 ${
+                                isSelected
+                                  ? 'border-emerald-500 bg-emerald-950 text-emerald-300'
+                                  : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'
+                              }`}
+                            >
+                              <span className="font-bold text-emerald-400 shrink-0">
+                                {opt.label}.
+                              </span>
+                              <span className="flex-1">{opt.text}</span>
+                            </button>
+                          );
+                        }
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Navigation hint when current question is unanswered */}
+                  {!hasAnsweredCurrent && !submittingQuiz && (
+                    <p className="text-xs text-amber-400/80 text-center mt-2">
+                      እባክዎ ለመቀጠል መጀመሪያ መልስ ይምረጡ።
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between gap-3 mt-3">
+                    <button
+                      type="button"
+                      onClick={prevStep}
+                      disabled={currentStep === 0 || submittingQuiz}
+                      className="flex-1 py-3 rounded-xl bg-slate-800 text-white font-medium disabled:opacity-40"
+                    >
+                      ወደ ኋላ
+                    </button>
+                    {currentStep < questions.length - 1 ? (
+                      <button
+                        type="button"
+                        onClick={nextStep}
+                        disabled={!hasAnsweredCurrent || submittingQuiz}
+                        className={`flex-1 py-3 rounded-xl font-medium transition-opacity ${
+                          hasAnsweredCurrent && !submittingQuiz
+                            ? 'bg-emerald-600 text-white active:bg-emerald-700'
+                            : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-60'
+                        }`}
+                      >
+                        ቀጣይ
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleSubmitQuiz}
+                        disabled={!hasAnsweredCurrent || submittingQuiz}
+                        className={`flex-1 py-3 rounded-xl font-bold transition-opacity ${
+                          hasAnsweredCurrent && !submittingQuiz
+                            ? 'bg-emerald-600 text-white active:bg-emerald-700'
+                            : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-60'
+                        }`}
+                      >
+                        {submittingQuiz ? 'አስረክብ...' : 'አስረክብ'}
+                      </button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
+                  <p className="text-emerald-400 font-bold text-lg">
+                    ውጤት፡ {score}/{questions.length}
+                  </p>
+                  <p className="text-slate-400 text-sm">
+                    ({questions.length > 0
+                      ? Math.round(((score ?? 0) / questions.length) * 100)
+                      : 0}
+                    %)
+                  </p>
+                  {savedScoreForLesson && (
+                    <p className="text-xs text-emerald-500/80">
+                      ውጤትዎ በስርዓቱ ተቀምጧል — በደርሱ ገፅ ላይ ይታያል።
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={goToLesson}
+                    className="w-full py-3 bg-slate-800 active:bg-slate-700 text-white rounded-xl"
+                  >
+                    ወደ ደርሱ ተመለስ
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
