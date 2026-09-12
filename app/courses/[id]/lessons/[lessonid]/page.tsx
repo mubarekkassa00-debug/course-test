@@ -57,7 +57,6 @@ interface SavedScore {
   score: number;
   total: number;
   percentage: number;
-  submittedAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -743,7 +742,45 @@ function resolveCourseId(courseId?: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// Dynamic quiz table resolver (matches updated Supabase table configuration)
+// CANONICAL COURSE SLUG (for `quiz_results.course_id` column)
+//
+// Maps every accepted URL variant to the canonical slug stored in the
+// `quiz_results` table:
+//   → 'usul_al_thalatha'
+//   → 'arbain'
+//   → 'shurut_as_salah'
+//   → 'urjuzat'
+// ---------------------------------------------------------------------------
+function getCanonicalCourseSlug(courseId: string): string | null {
+  const normalized = (courseId || '').toLowerCase().trim();
+  switch (normalized) {
+    case '1':
+    case 'usul':
+    case 'usul_al_thalatha':
+      return 'usul_al_thalatha';
+    case '2':
+    case 'arbaeen':
+    case 'arbain':
+      return 'arbain';
+    case '3':
+    case 'shurut':
+    case 'shurut-salat':
+    case 'shurut_as_salah':
+      return 'shurut_as_salah';
+    case '4':
+    case 'urjuzetul':
+    case 'urjizetul':
+    case 'urjuzetul-miiyah':
+    case 'urjuzat':
+    case 'urjuzat_al_miiyyah':
+      return 'urjuzat';
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic quiz table resolver (question source tables — DO NOT ALTER)
 //
 //   Course 1 (Usul Al-Thalatha)   -> usul_al_thalatha_quiz
 //   Course 2 (Arbain An-Nawawi)   -> arbain_quiz
@@ -768,11 +805,8 @@ function getQuizTableName(courseId: number): string | null {
 // ---------------------------------------------------------------------------
 // Column-name resolver.
 //
-//   The `questions` table (Urjuzetul Mi'iyah / generic questions) stores
-//   the lesson identifier in a column called `lesson_id`.
-//
-//   The other tables (usul_al_thalatha_quiz, arbain_quiz,
-//   shurut_as_salah_quiz) store the lesson identifier in `lesson_number`.
+//   The `questions` table stores the lesson identifier in `lesson_id`.
+//   All other quiz tables store it in `lesson_number`.
 // ---------------------------------------------------------------------------
 function getLessonColumnName(tableName: string): 'lesson_id' | 'lesson_number' {
   if (tableName === 'questions') {
@@ -783,11 +817,6 @@ function getLessonColumnName(tableName: string): 'lesson_id' | 'lesson_number' {
 
 // ---------------------------------------------------------------------------
 // Strict integer parser for lesson_number / lesson_id.
-//
-//   currentLessonId = 'shurut-lesson-1'  →  1
-//   currentLessonId = 'urjuzetul-lesson-5' →  5
-//   lesson.lessonNumber = 101            →  1   (Arbain offset)
-//   lesson.lessonNumber = 201            →  1   (Urjuzetul offset)
 // ---------------------------------------------------------------------------
 function parseLessonNumber(
   lessonNumberFromList: number | undefined | null,
@@ -816,18 +845,12 @@ function parseLessonNumber(
 // ---------------------------------------------------------------------------
 // UNIVERSAL OPTION PARSING
 //
-// Handles BOTH schemas used across our courses:
-//
-//   A) Standard tables (arbain_quiz, shurut_as_salah_quiz, etc.):
-//        → one `options` JSON/Array column
-//
-//   B) The `questions` table (Urjuzetul Mi'iyah):
-//        → discrete columns option_a / option_b / option_c / option_d
-//        → correct_answer stores an Amharic letter ('ሀ', 'ለ', 'ሐ', 'መ')
+//   A) Standard tables → one `options` JSON/Array column
+//   B) `questions`     → discrete option_a / option_b / option_c / option_d
+//                        with correct_answer stored as Amharic letters
 // ---------------------------------------------------------------------------
 const AMHARIC_LABELS = ['ሀ', 'ለ', 'ሐ', 'መ'];
 
-// Helper to safely parse an `options` column when it's a JSON string or array
 function parseOptions(options: any): string[] {
   if (Array.isArray(options)) return options;
   if (typeof options === 'string') {
@@ -841,7 +864,6 @@ function parseOptions(options: any): string[] {
   return [];
 }
 
-// Build normalized options from discrete option_a..option_d columns
 function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
   const rawValues = [item.option_a, item.option_b, item.option_c, item.option_d];
   const result: NormalizedOption[] = [];
@@ -852,7 +874,7 @@ function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
     if (text === '') return;
 
     result.push({
-      label: AMHARIC_LABELS[index] ?? String.fromCharCode(65 + index), // fallback A/B/C...
+      label: AMHARIC_LABELS[index] ?? String.fromCharCode(65 + index),
       text,
     });
   });
@@ -860,7 +882,6 @@ function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
   return result;
 }
 
-// Build normalized options from an `options` array/JSON column
 function buildOptionsFromArray(item: any): NormalizedOption[] {
   const arr = parseOptions(item.options);
   return arr
@@ -871,7 +892,6 @@ function buildOptionsFromArray(item: any): NormalizedOption[] {
     }));
 }
 
-// Normalize one raw row coming from Supabase into a uniform shape
 function normalizeQuestion(item: any): NormalizedQuestion {
   const hasDiscreteColumns =
     item.option_a !== undefined ||
@@ -890,8 +910,6 @@ function normalizeQuestion(item: any): NormalizedQuestion {
 
   let correctAnswerText = rawCorrect;
 
-  // If `correct_answer` is an Amharic letter, resolve it to the option text
-  // so scoring works uniformly across all course tables.
   const byLabel = options.find((opt) => opt.label === rawCorrect);
   if (byLabel) {
     correctAnswerText = byLabel.text;
@@ -906,39 +924,11 @@ function normalizeQuestion(item: any): NormalizedQuestion {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Score persistence helpers (localStorage-backed)
-// ---------------------------------------------------------------------------
-const SCORE_STORAGE_KEY = 'quiz_scores_v1';
-
-function loadAllScores(): Record<string, SavedScore> {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(SCORE_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeAllScores(scores: Record<string, SavedScore>) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(SCORE_STORAGE_KEY, JSON.stringify(scores));
-  } catch {
-    /* ignore quota errors */
-  }
-}
-
 export default function LessonPage() {
   const params = useParams();
 
   // ------------------------------------------------------------------
   // PARAM RESOLUTION (client component → useParams, synchronous)
-  // Reads every possible folder-name variant so the code works whether
-  // the folders are named [id]/[lessonId], [courseId]/[lessonid], etc.
   // ------------------------------------------------------------------
   const rawCourseId =
     (params as any)?.courseId ??
@@ -989,13 +979,7 @@ export default function LessonPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // ------------------------------------------------------------------
-  // REQUIREMENT #1: strict audio finish lock.
-  // `isAudioFinished` starts false on every mount and every lesson
-  // change, and is ONLY flipped to true by the real `onEnded` event
-  // (see `handleAudioEnded`). This prevents the "ፈተናውን ጀምር" button
-  // from appearing prematurely at 0:00.
-  // ------------------------------------------------------------------
+  // Strict audio finish lock (do not modify).
   const [isAudioFinished, setIsAudioFinished] = useState(false);
   const [isQuizUnlocked, setIsQuizUnlocked] = useState(false);
 
@@ -1010,46 +994,20 @@ export default function LessonPage() {
   const [submittingQuiz, setSubmittingQuiz] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Persistent per-lesson scores (localStorage + state mirror)
-  const [savedScores, setSavedScores] = useState<Record<string, SavedScore>>({});
+  // ------------------------------------------------------------------
+  // Score fetched from `quiz_results` (Supabase) for the current
+  // (user_id, course_id, lesson_id) triple. Displayed in the header
+  // and on the quiz result screen.
+  // ------------------------------------------------------------------
+  const [savedScore, setSavedScore] = useState<SavedScore | null>(null);
+  const [loadingSavedScore, setLoadingSavedScore] = useState(false);
 
-  // Mark component as mounted to avoid hydration mismatch and state update before mount
+  // Mark component as mounted to avoid hydration mismatch
   useEffect(() => {
     setHasMounted(true);
   }, []);
 
-  // Hydrate saved scores from localStorage (client-only)
-  useEffect(() => {
-    setSavedScores(loadAllScores());
-  }, []);
-
-  // Persist helper — writes to localStorage and updates in-memory state
-  const persistScore = (
-    lessonKey: string,
-    correct: number,
-    total: number
-  ): SavedScore => {
-    const percentage = total > 0 ? Math.round((correct / total) * 100) : 0;
-    const entry: SavedScore = {
-      score: correct,
-      total,
-      percentage,
-      submittedAt: new Date().toISOString(),
-    };
-    setSavedScores((prev) => {
-      const next = { ...prev, [lessonKey]: entry };
-      writeAllScores(next);
-      return next;
-    });
-    return entry;
-  };
-
-  // ------------------------------------------------------------------
-  // REQUIREMENT #2: reset on lesson change.
-  // Navigating between lessons hard-resets the audio finish lock so
-  // the Start Quiz button is hidden again until the new lesson's
-  // audio actually finishes.
-  // ------------------------------------------------------------------
+  // Reset UI on lesson change.
   useEffect(() => {
     setCurrentImg(0);
     setIsAudioFinished(false);
@@ -1062,25 +1020,82 @@ export default function LessonPage() {
   }, [lesson]);
 
   // ------------------------------------------------------------------
-  // NOTE: The previous localStorage auto-unlock effect has been
-  // intentionally REMOVED. It was the primary cause of the premature
-  // button display (once a user finished a lesson once, the unlock flag
-  // persisted and would show the button at 0:00 on every later visit).
-  // The unlock is now purely session-scoped and strictly gated on the
-  // `onEnded` event.
+  // Fetch previously saved score from `quiz_results` on lesson change.
   // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!lesson) {
+      setSavedScore(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchSavedScore = async () => {
+      const canonicalSlug = getCanonicalCourseSlug(courseId);
+      if (!canonicalSlug) {
+        if (!cancelled) setSavedScore(null);
+        return;
+      }
+
+      setLoadingSavedScore(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          if (!cancelled) setSavedScore(null);
+          return;
+        }
+
+        const lessonNum = parseLessonNumber(
+          lesson.lessonNumber,
+          currentLessonId
+        );
+
+        const { data, error } = await supabase
+          .from('quiz_results')
+          .select('score, total_questions')
+          .eq('user_id', user.id)
+          .eq('course_id', canonicalSlug)
+          .eq('lesson_id', lessonNum)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        if (error) {
+          console.error('Error fetching saved score:', error);
+          setSavedScore(null);
+          return;
+        }
+
+        if (data) {
+          const total = Number(data.total_questions) || 0;
+          const rawScore = Number(data.score) || 0;
+          setSavedScore({
+            score: rawScore,
+            total,
+            percentage: total > 0 ? Math.round((rawScore / total) * 100) : 0,
+          });
+        } else {
+          setSavedScore(null);
+        }
+      } catch (e) {
+        if (!cancelled) setSavedScore(null);
+        console.error('Failed to fetch saved score:', e);
+      } finally {
+        if (!cancelled) setLoadingSavedScore(false);
+      }
+    };
+
+    fetchSavedScore();
+    return () => {
+      cancelled = true;
+    };
+  }, [lesson, courseId, currentLessonId]);
 
   // ------------------------------------------------------------------
   // Fetch quiz questions from the correct dynamic table.
-  //
-  //   For table = 'questions'          → filter column = 'lesson_id'
-  //   For all other tables             → filter column = 'lesson_number'
-  //
-  //   Final example for Urjuzetul Mi'iyah lesson 1:
-  //     supabase
-  //       .from('questions')
-  //       .select('*')
-  //       .eq('lesson_id', 1)
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!lesson) return;
@@ -1113,10 +1128,8 @@ export default function LessonPage() {
           return;
         }
 
-        // Resolve the correct column name for this table
         const lessonColumn = getLessonColumnName(tableName);
 
-        // Parse the lesson identifier as an integer
         const targetLessonNumber = parseLessonNumber(
           lesson?.lessonNumber,
           currentLessonId
@@ -1150,7 +1163,6 @@ export default function LessonPage() {
           return;
         }
 
-        // Universal normalization — works for both schema variants
         const parsedQuestions: NormalizedQuestion[] =
           questionsData.map(normalizeQuestion);
 
@@ -1173,12 +1185,7 @@ export default function LessonPage() {
     };
   }, [lesson, courseId, currentLessonId, retryKey]);
 
-  // ------------------------------------------------------------------
-  // handleAudioEnded: fired ONLY by the <audio> element's real `onEnded`.
-  // - Sets the strict audio finish lock (requirement #1)
-  // - Unlocks the quiz and auto-switches to the quiz tab
-  // - Bumps retryKey so the fetch effect re-runs with fresh questions
-  // ------------------------------------------------------------------
+  // Audio ended handler.
   const handleAudioEnded = () => {
     if (isAudioFinished) return; // idempotent
     console.log('Audio completed → unlocking + auto-starting quiz...');
@@ -1188,13 +1195,7 @@ export default function LessonPage() {
     setRetryKey((prev) => prev + 1);
   };
 
-  // ------------------------------------------------------------------
-  // Fallback safety net for browsers that don't reliably fire `ended`.
-  // Hardened so it can NEVER fire prematurely at 0:00:
-  //   - duration must be a finite positive number > 1 second
-  //   - currentTime must be > 0.5s
-  //   - currentTime must be within 0.5s of the end
-  // ------------------------------------------------------------------
+  // Fallback safety net — hardened against 0:00 false positives.
   const handleAudioTimeUpdate = (e: React.SyntheticEvent<HTMLAudioElement>) => {
     const audio = e.currentTarget;
     if (
@@ -1215,6 +1216,10 @@ export default function LessonPage() {
     setSelectedAnswers((prev) => ({ ...prev, [String(questionId)]: optionText }));
   };
 
+  // ------------------------------------------------------------------
+  // Submit → save score to `quiz_results` via upsert.
+  // onConflict target: (user_id, course_id, lesson_id)
+  // ------------------------------------------------------------------
   const handleSubmitQuiz = async () => {
     if (!questions.length || !lesson || submittingQuiz) return;
 
@@ -1225,13 +1230,14 @@ export default function LessonPage() {
       return selected && selected === q.correctAnswerText ? acc + 1 : acc;
     }, 0);
 
+    const total = questions.length;
+    const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0;
+
     setScore(correctCount);
     setQuizSubmitted(true);
 
-    // Persist score locally (instant + survives reload) AND attempt
-    // to store server-side in quiz_attempts.
-    const lessonKey = lesson.id || currentLessonId || String(lesson.lessonNumber);
-    persistScore(lessonKey, correctCount, questions.length);
+    // Optimistically update the header badge.
+    setSavedScore({ score: correctCount, total, percentage });
 
     try {
       const {
@@ -1239,28 +1245,42 @@ export default function LessonPage() {
       } = await supabase.auth.getUser();
 
       if (!user) {
-        // Not signed in → keep the locally-saved score, don't block the user.
-        console.warn('No auth user; score saved locally only.');
+        console.warn('No auth user; cannot persist score to quiz_results.');
         setSubmittingQuiz(false);
         return;
       }
 
-      const { error } = await supabase.from('quiz_attempts').insert({
-        user_id: user.id,
-        quiz_id: quiz?.id || null,
-        lesson_id: lesson.lessonNumber % 100,
-        score: correctCount,
-        total: questions.length,
-        answers: selectedAnswers,
-        submitted_at: new Date().toISOString(),
-      });
+      const canonicalSlug = getCanonicalCourseSlug(courseId);
+      if (!canonicalSlug) {
+        console.error(
+          'Cannot resolve canonical course slug for quiz_results:',
+          courseId
+        );
+        setSubmittingQuiz(false);
+        return;
+      }
+
+      const lessonNum = parseLessonNumber(
+        lesson.lessonNumber,
+        currentLessonId
+      );
+
+      const { error } = await supabase.from('quiz_results').upsert(
+        {
+          user_id: user.id,
+          course_id: canonicalSlug,
+          lesson_id: lessonNum,
+          score: correctCount,
+          total_questions: total,
+        },
+        { onConflict: 'user_id,course_id,lesson_id' }
+      );
 
       if (error) {
-        console.error('quiz_attempts insert error:', error);
-        // Score is still saved locally, so we don't block the user.
+        console.error('quiz_results upsert error:', error);
       }
     } catch (e: any) {
-      console.error('Failed to save quiz result to server:', e);
+      console.error('Failed to save quiz result to quiz_results:', e);
     } finally {
       setSubmittingQuiz(false);
     }
@@ -1328,10 +1348,6 @@ export default function LessonPage() {
   const quizAvailable = questions.length > 0;
   const totalImages = lesson.images.length;
 
-  // Header score badge lookup.
-  const savedScoreForLesson: SavedScore | undefined =
-    savedScores[lesson.id] || savedScores[currentLessonId];
-
   return (
     <div className="h-screen max-h-[100dvh] flex flex-col overflow-hidden bg-slate-950 text-slate-100">
       {/* Header */}
@@ -1375,13 +1391,13 @@ export default function LessonPage() {
             <h1 className="text-base font-bold text-white truncate">
               {lesson.title}
             </h1>
-            {/* Show achieved score inline on the header */}
-            {savedScoreForLesson && (
+            {/* Show previously saved score from quiz_results */}
+            {savedScore && (
               <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-[11px] font-medium">
                 <Trophy className="h-3 w-3" />
-                ውጤት፡ {savedScoreForLesson.score}/{savedScoreForLesson.total}
+                ውጤት፡ {savedScore.score}/{savedScore.total}
                 <span className="text-emerald-500/80">
-                  ({savedScoreForLesson.percentage}%)
+                  ({savedScore.percentage}%)
                 </span>
               </div>
             )}
@@ -1476,8 +1492,6 @@ export default function LessonPage() {
                   className="w-full rounded-lg"
                   src={lesson.audioUrl}
                   preload="metadata"
-                  // REQUIREMENT #1: this is the ONLY real trigger that
-                  // flips `isAudioFinished` to true.
                   onEnded={() => {
                     setIsAudioFinished(true);
                     handleAudioEnded();
@@ -1524,12 +1538,7 @@ export default function LessonPage() {
               </div>
             )}
 
-            {/*
-              REQUIREMENT #1 & #2: The Start Quiz button renders ONLY when
-              the audio has actually finished. `isAudioFinished` resets to
-              false on every lesson change so the button is always hidden
-              after navigation/refresh.
-            */}
+            {/* Start Quiz button — gated by isAudioFinished */}
             {!loadingQuiz &&
               quizAvailable &&
               (isAudioFinished || !lesson.audioUrl) && (
@@ -1543,10 +1552,6 @@ export default function LessonPage() {
                 </button>
               )}
 
-            {/*
-              Optional hint so the user knows what to do while listening.
-              Hidden as soon as the audio finishes.
-            */}
             {!loadingQuiz &&
               quizAvailable &&
               lesson.audioUrl &&
@@ -1646,7 +1651,6 @@ export default function LessonPage() {
                     </div>
                   </div>
 
-                  {/* Navigation hint when current question is unanswered */}
                   {!hasAnsweredCurrent && !submittingQuiz && (
                     <p className="text-xs text-amber-400/80 text-center mt-2">
                       እባክዎ ለመቀጠል መጀመሪያ መልስ ይምረጡ።
@@ -1702,7 +1706,7 @@ export default function LessonPage() {
                       : 0}
                     %)
                   </p>
-                  {savedScoreForLesson && (
+                  {savedScore && (
                     <p className="text-xs text-emerald-500/80">
                       ውጤትዎ በስርዓቱ ተቀምጧል — በደርሱ ገፅ ላይ ይታያል።
                     </p>
