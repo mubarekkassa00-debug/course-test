@@ -845,27 +845,61 @@ function parseLessonNumber(
 // ---------------------------------------------------------------------------
 // UNIVERSAL OPTION PARSING
 //
-//   A) Standard tables → one `options` JSON/Array column
-//   B) `questions`     → discrete option_a / option_b / option_c / option_d
-//                        with correct_answer stored as Amharic letters
+// Updated for the cleaned Supabase schema:
+//
+//   • Correct-answer column name → `correct_option`
+//     Values are Amharic labels: 'ሀ' | 'ለ' | 'ሐ' | 'መ'
+//
+//   • Options may live in either of two shapes:
+//       A) Discrete columns  → option_a / option_b / option_c / option_d
+//       B) JSON array column → `options` (native array or JSON string)
+//
+// The resolver maps the Amharic label back to the exact option *text*
+// so scoring in the caller is a simple string comparison.
 // ---------------------------------------------------------------------------
 const AMHARIC_LABELS = ['ሀ', 'ለ', 'ሐ', 'መ'];
 
+/**
+ * Safely parse an `options` column value. Accepts:
+ *   • a native array               → used directly
+ *   • a JSON-encoded array string  → JSON.parse'd
+ *   • null / undefined / malformed → returns []
+ */
 function parseOptions(options: any): string[] {
-  if (Array.isArray(options)) return options;
+  if (Array.isArray(options)) {
+    return options
+      .filter((v) => v !== null && v !== undefined)
+      .map((v) => String(v));
+  }
   if (typeof options === 'string') {
+    const trimmed = options.trim();
+    if (trimmed === '') return [];
     try {
-      const parsed = JSON.parse(options);
-      return Array.isArray(parsed) ? parsed : [];
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((v) => v !== null && v !== undefined)
+          .map((v) => String(v));
+      }
     } catch {
-      return [];
+      // Not valid JSON — treat as no options available.
     }
   }
   return [];
 }
 
+/**
+ * Build normalized options from discrete option_a..option_d columns.
+ * Empty / null entries are skipped, but the label index is preserved
+ * against the original column position (so 'option_c' always → 'ሐ').
+ */
 function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
-  const rawValues = [item.option_a, item.option_b, item.option_c, item.option_d];
+  const rawValues = [
+    item.option_a,
+    item.option_b,
+    item.option_c,
+    item.option_d,
+  ];
   const result: NormalizedOption[] = [];
 
   rawValues.forEach((value, index) => {
@@ -882,17 +916,52 @@ function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
   return result;
 }
 
-function buildOptionsFromArray(item: any): NormalizedOption[] {
-  const arr = parseOptions(item.options);
-  return arr
-    .filter((v) => v !== null && v !== undefined && String(v).trim() !== '')
-    .map((value, index) => ({
+/**
+ * Build normalized options from an `options` array/JSON column.
+ * Empty / null entries are filtered out.
+ */
+function buildOptionsFromArrayColumn(item: any): NormalizedOption[] {
+  const arr = parseOptions(item?.options);
+  const result: NormalizedOption[] = [];
+
+  arr.forEach((value, index) => {
+    const text = String(value).trim();
+    if (text === '') return;
+
+    result.push({
       label: AMHARIC_LABELS[index] ?? String.fromCharCode(65 + index),
-      text: String(value),
-    }));
+      text,
+    });
+  });
+
+  return result;
 }
 
+/**
+ * Resolve the raw `correct_option` label ('ሀ', 'ለ', 'ሐ', 'መ') to the
+ * matching option text. Falls back to the raw label if no option
+ * matches, so information is never silently lost.
+ */
+function resolveCorrectAnswerText(
+  rawCorrectLabel: string,
+  options: NormalizedOption[]
+): string {
+  if (rawCorrectLabel === '') return '';
+
+  const match = options.find((opt) => opt.label === rawCorrectLabel);
+  if (match) return match.text;
+
+  // Fallback: return the raw label as-is.
+  return rawCorrectLabel;
+}
+
+/**
+ * Normalize one raw row coming from Supabase into a uniform shape.
+ * Reads `correct_option` (Amharic label) and resolves it to the
+ * corresponding option text for uniform scoring.
+ */
 function normalizeQuestion(item: any): NormalizedQuestion {
+  // (1) Options — discrete columns take priority, else JSON `options`.
   const hasDiscreteColumns =
     item.option_a !== undefined ||
     item.option_b !== undefined ||
@@ -901,19 +970,16 @@ function normalizeQuestion(item: any): NormalizedQuestion {
 
   const options = hasDiscreteColumns
     ? buildOptionsFromDiscreteColumns(item)
-    : buildOptionsFromArray(item);
+    : buildOptionsFromArrayColumn(item);
 
-  const rawCorrect =
-    item.correct_answer === null || item.correct_answer === undefined
+  // (2) Correct answer — read the `correct_option` column.
+  const rawCorrectLabel =
+    item.correct_option === null || item.correct_option === undefined
       ? ''
-      : String(item.correct_answer).trim();
+      : String(item.correct_option).trim();
 
-  let correctAnswerText = rawCorrect;
-
-  const byLabel = options.find((opt) => opt.label === rawCorrect);
-  if (byLabel) {
-    correctAnswerText = byLabel.text;
-  }
+  // (3) Resolve label → option text for uniform scoring.
+  const correctAnswerText = resolveCorrectAnswerText(rawCorrectLabel, options);
 
   return {
     id: item.id ?? item.question_id ?? Math.random().toString(36).slice(2),
