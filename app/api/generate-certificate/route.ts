@@ -4,8 +4,8 @@
 //
 // Flow:
 //   1. Read `userId` from the JSON request body.
-//   2. Fetch the user record from Supabase Auth and extract their display
-//      name from `user_metadata` (display_name → username → 'kassa').
+//   2. Fetch the user's display name using a strict fallback chain:
+//        user_metadata.full_name  →  user_metadata.name  →  profiles.full_name  →  'Student'
 //   3. Verify the user has passed ALL 4 required courses (score / total ≥ 0.5).
 //   4. Verify the user has an `approved` row in `payments`.
 //   5. Generate a landscape A4 PDF in memory.
@@ -60,8 +60,8 @@ const CERTIFICATES_BUCKET = 'certificates';
 const PAGE_W = 841.89;
 const PAGE_H = 595.28;
 
-/** Fallback display name used when the user has no metadata. */
-const FALLBACK_STUDENT_NAME = 'kassa';
+/** Last-resort fallback if no name can be resolved from any source. */
+const GENERIC_FALLBACK_NAME = 'Student';
 
 // ---------------------------------------------------------------------------
 // Supabase client (lazy, cached) — service-role with anon-key fallback
@@ -189,22 +189,81 @@ function pdfDownloadResponse(
 
 /**
  * Resolve the display name from a Supabase Auth user object.
- * Priority:  metadata.display_name  →  metadata.username  →  fallback.
+ *
+ * Priority chain (first non-empty wins):
+ *   1. user_metadata.full_name
+ *   2. user_metadata.name
+ *   3. user_metadata.display_name   (kept for backward compatibility)
+ *   4. user_metadata.username       (kept for backward compatibility)
+ *   5. user.email
+ *   6. GENERIC_FALLBACK_NAME ('Student')
+ *
+ * NOTE: `profiles.full_name` is checked separately by the caller when
+ * `getUserById` is unavailable (anon key mode).
  */
-function resolveStudentName(authUser: unknown): string {
+function resolveStudentNameFromAuth(authUser: unknown): string {
   const meta = (authUser as { user_metadata?: Record<string, unknown> } | null)
     ?.user_metadata;
+  const email = (authUser as { email?: unknown } | null)?.email;
+
   if (meta) {
-    const displayName = meta.display_name;
-    if (typeof displayName === 'string' && displayName.trim() !== '') {
-      return displayName.trim();
-    }
-    const username = meta.username;
-    if (typeof username === 'string' && username.trim() !== '') {
-      return username.trim();
+    const candidates: unknown[] = [
+      meta.full_name,
+      meta.name,
+      meta.display_name,
+      meta.username,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim() !== '') {
+        return candidate.trim();
+      }
     }
   }
-  return FALLBACK_STUDENT_NAME;
+
+  if (typeof email === 'string' && email.trim() !== '') {
+    return email.trim();
+  }
+
+  return GENERIC_FALLBACK_NAME;
+}
+
+/**
+ * Look up the student's `full_name` from the `profiles` table.
+ * Returns `''` on any failure (missing table, missing row, RLS, etc.).
+ *
+ * Used as an additional fallback when Auth metadata doesn't yield a name.
+ */
+async function fetchProfileFullName(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<string> {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn(
+        '[generate-certificate] profiles lookup warning:',
+        error.message
+      );
+      return '';
+    }
+
+    const fullName = (data as { full_name?: unknown } | null)?.full_name;
+    if (typeof fullName === 'string' && fullName.trim() !== '') {
+      return fullName.trim();
+    }
+    return '';
+  } catch (err) {
+    console.warn(
+      '[generate-certificate] profiles lookup unexpected error:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return '';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +361,7 @@ function generateCertificatePdf(opts: {
           align: 'center', width: PAGE_W,
         });
 
-      // Student name (fetched from Supabase Auth metadata)
+      // Student name (dynamically resolved)
       doc.fillColor(NEAR_BLACK).font('Helvetica-Bold').fontSize(30)
         .text(studentName, 0, 262, { align: 'center', width: PAGE_W });
 
@@ -416,10 +475,24 @@ export async function POST(request: Request) {
     );
   }
 
-  // ---------- 3. Fetch the user's display name from Supabase Auth ----------
-  //   Only attempt the Auth admin API when we actually have the service
-  //   role key — otherwise skip silently and use the fallback name.
-  let studentName = FALLBACK_STUDENT_NAME;
+  // ---------- 3. Resolve the student's display name ----------
+  //
+  //   Priority chain (first non-empty wins):
+  //     1. user_metadata.full_name
+  //     2. user_metadata.name
+  //     3. user_metadata.display_name   (backward compat)
+  //     4. user_metadata.username       (backward compat)
+  //     5. user.email
+  //     6. profiles.full_name           (queried via the service role or anon key)
+  //     7. 'Student'                    (last resort)
+  //
+  //   Both the Auth admin lookup and the profiles lookup are best-effort:
+  //   any failure silently falls through to the next source, and the PDF
+  //   is still generated.
+  // ---------------------------------------------------------------------
+  let studentName = '';
+
+  // (a) Try the Auth admin API when we have the service role key.
   if (clientMode === 'service') {
     try {
       const { data: userData, error: userErr } =
@@ -430,21 +503,36 @@ export async function POST(request: Request) {
           '[generate-certificate] getUserById warning:',
           userErr.message
         );
-        // Non-fatal: fall back to the default name.
-      } else {
-        studentName = resolveStudentName(userData?.user);
+      } else if (userData?.user) {
+        const fromAuth = resolveStudentNameFromAuth(userData.user);
+        // Only accept if it isn't the generic fallback — otherwise try profiles.
+        if (fromAuth && fromAuth !== GENERIC_FALLBACK_NAME) {
+          studentName = fromAuth;
+        }
       }
     } catch (userCatch) {
       console.warn(
         '[generate-certificate] getUserById unexpected error:',
         userCatch instanceof Error ? userCatch.message : String(userCatch)
       );
-      // Non-fatal: fall back to the default name.
     }
   } else {
     console.warn(
-      '[generate-certificate] Anon key in use — skipping Auth admin lookup; using fallback display name.'
+      '[generate-certificate] Anon key in use — skipping Auth admin lookup; will try the profiles table instead.'
     );
+  }
+
+  // (b) Fallback to the `profiles` table if the Auth lookup didn't yield a name.
+  if (studentName === '') {
+    const fromProfile = await fetchProfileFullName(supabase, userId);
+    if (fromProfile !== '') {
+      studentName = fromProfile;
+    }
+  }
+
+  // (c) Last-resort generic fallback.
+  if (studentName === '') {
+    studentName = GENERIC_FALLBACK_NAME;
   }
 
   // ---------- 4. Verify payment approval ----------
@@ -594,7 +682,6 @@ export async function POST(request: Request) {
 
   // ---------- 8a. Fallback: stream the PDF directly ----------
   if (uploadFailed) {
-    // Log a concise warning for monitoring, but still deliver the PDF.
     console.warn(
       `[generate-certificate] Delivering PDF inline (storage unavailable). Reason: ${uploadErrorMessage}`
     );
@@ -614,7 +701,6 @@ export async function POST(request: Request) {
     console.warn(
       '[generate-certificate] getPublicUrl returned empty — falling back to direct PDF stream.'
     );
-    // Best-effort cleanup of the orphaned object.
     try {
       await supabase.storage.from(CERTIFICATES_BUCKET).remove([filePath]);
     } catch {
