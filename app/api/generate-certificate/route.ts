@@ -8,8 +8,11 @@
 //      name from `user_metadata` (display_name → username → 'kassa').
 //   3. Verify the user has passed ALL 4 required courses (score / total ≥ 0.5).
 //   4. Verify the user has an `approved` row in `payments`.
-//   5. Generate a landscape A4 PDF in memory, upload it to Supabase Storage,
-//      and return the public URL + certificate ID.
+//   5. Generate a landscape A4 PDF in memory.
+//   6. Try to upload the PDF to Supabase Storage. If the upload FAILS for
+//      any reason (missing bucket, RLS denial, network, quota, etc.), fall
+//      back to streaming the PDF directly to the client as a download.
+//   7. On successful upload, return the public URL + certificate ID.
 //
 // This file contains ONLY server-side logic — no JSX, no HTML, no React hooks.
 
@@ -148,6 +151,39 @@ function formatIssueDate(date: Date): string {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
+  });
+}
+
+/**
+ * Build a filesystem-safe filename for the downloaded certificate PDF.
+ */
+function buildCertificateFilename(studentName: string): string {
+  const safe = studentName
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_-]/g, '');
+  return `Basira_Certificate_${safe || 'Student'}.pdf`;
+}
+
+/**
+ * Return the PDF buffer to the client as a downloadable attachment.
+ * Used both as an explicit inline mode and as the fallback when a
+ * Supabase Storage upload fails.
+ */
+function pdfDownloadResponse(
+  pdfBuffer: Buffer,
+  filename: string,
+  certificateId: string
+): NextResponse {
+  return new NextResponse(pdfBuffer as unknown as BodyInit, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': String(pdfBuffer.length),
+      'Cache-Control': 'no-store',
+      'X-Certificate-Id': certificateId,
+    },
   });
 }
 
@@ -497,10 +533,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // ---------- 6. Generate and upload the PDF ----------
+  // ---------- 6. Generate the PDF ----------
   const issueDate = new Date();
   const certificateId = generateCertificateId();
   const filePath = `${safeUserId}/${certificateId}.pdf`;
+  const downloadFilename = buildCertificateFilename(studentName);
 
   let pdfBuffer: Buffer;
   try {
@@ -518,37 +555,75 @@ export async function POST(request: Request) {
     );
   }
 
-  const { error: uploadError } = await supabase.storage
-    .from(CERTIFICATES_BUCKET)
-    .upload(filePath, pdfBuffer, {
-      contentType: 'application/pdf',
-      cacheControl: '31536000',
-      upsert: false,
-    });
+  // ---------- 7. Try to upload the PDF to Supabase Storage ----------
+  //
+  // If the upload fails for ANY reason (missing bucket, RLS denial,
+  // network error, quota, etc.), we DO NOT return a 500. Instead we
+  // gracefully fall back to streaming the PDF directly to the client as
+  // an attachment. The certificate is still valid and the student gets
+  // their file — only the persistent URL is unavailable in that case.
+  let uploadFailed = false;
+  let uploadErrorMessage = '';
 
-  if (uploadError) {
-    console.error('[generate-certificate] upload error:', uploadError);
-    return NextResponse.json(
-      { eligible: false, error: 'Failed to upload certificate.' },
-      { status: 500 }
+  try {
+    const { error: uploadError } = await supabase.storage
+      .from(CERTIFICATES_BUCKET)
+      .upload(filePath, pdfBuffer, {
+        contentType: 'application/pdf',
+        cacheControl: '31536000',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      uploadFailed = true;
+      uploadErrorMessage = uploadError.message || 'unknown storage error';
+      console.error(
+        '[generate-certificate] Storage upload failed — falling back to direct PDF stream:',
+        uploadError
+      );
+    }
+  } catch (uploadCatch) {
+    uploadFailed = true;
+    uploadErrorMessage =
+      uploadCatch instanceof Error ? uploadCatch.message : String(uploadCatch);
+    console.error(
+      '[generate-certificate] Storage upload threw — falling back to direct PDF stream:',
+      uploadCatch
     );
   }
 
+  // ---------- 8a. Fallback: stream the PDF directly ----------
+  if (uploadFailed) {
+    // Log a concise warning for monitoring, but still deliver the PDF.
+    console.warn(
+      `[generate-certificate] Delivering PDF inline (storage unavailable). Reason: ${uploadErrorMessage}`
+    );
+    return pdfDownloadResponse(pdfBuffer, downloadFilename, certificateId);
+  }
+
+  // ---------- 8b. Happy path: resolve the public URL ----------
   const { data: publicUrlData } = supabase.storage
     .from(CERTIFICATES_BUCKET)
     .getPublicUrl(filePath);
 
   const certificateUrl = publicUrlData?.publicUrl ?? '';
 
+  // If for some reason the URL cannot be resolved, also fall back to
+  // streaming the PDF rather than failing the request.
   if (!certificateUrl) {
-    await supabase.storage.from(CERTIFICATES_BUCKET).remove([filePath]);
-    return NextResponse.json(
-      { eligible: false, error: 'Failed to resolve certificate URL.' },
-      { status: 500 }
+    console.warn(
+      '[generate-certificate] getPublicUrl returned empty — falling back to direct PDF stream.'
     );
+    // Best-effort cleanup of the orphaned object.
+    try {
+      await supabase.storage.from(CERTIFICATES_BUCKET).remove([filePath]);
+    } catch {
+      /* ignore cleanup errors */
+    }
+    return pdfDownloadResponse(pdfBuffer, downloadFilename, certificateId);
   }
 
-  // ---------- 7. Success ----------
+  // ---------- 9. Success ----------
   return NextResponse.json(
     {
       eligible: true,
