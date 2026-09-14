@@ -845,19 +845,34 @@ function parseLessonNumber(
 // ---------------------------------------------------------------------------
 // UNIVERSAL OPTION PARSING
 //
-// Updated for the cleaned Supabase schema:
+// Updated for the cleaned Supabase schema, with support for BOTH:
 //
-//   • Correct-answer column name → `correct_option`
-//     Values are Amharic labels: 'ሀ' | 'ለ' | 'ሐ' | 'መ'
+//   1) `correct_option_index` (integer 0 | 1 | 2 | 3) → PRIMARY
+//      Maps directly to options[0] | options[1] | options[2] | options[3].
+//
+//   2) `correct_option` (legacy) → FALLBACK
+//      May contain:
+//        • an Amharic label ('ሀ', 'ለ', 'ሐ', 'መ')
+//        • a Latin letter ('A', 'a', 'B', 'b', ...)
+//        • a numeric string ('0', '1', '2', '3')
+//        • the raw option text
 //
 //   • Options may live in either of two shapes:
 //       A) Discrete columns  → option_a / option_b / option_c / option_d
 //       B) JSON array column → `options` (native array or JSON string)
 //
-// The resolver maps the Amharic label back to the exact option *text*
-// so scoring in the caller is a simple string comparison.
+// The resolver maps the raw correct-answer reference to the exact option
+// *text* so scoring in the caller is a simple string comparison.
 // ---------------------------------------------------------------------------
 const AMHARIC_LABELS = ['ሀ', 'ለ', 'ሐ', 'መ'];
+
+/** Latin letter → 0-based option index (case-insensitive). */
+const LATIN_TO_INDEX: Record<string, number> = {
+  a: 0,
+  b: 1,
+  c: 2,
+  d: 3,
+};
 
 /**
  * Safely parse an `options` column value. Accepts:
@@ -938,27 +953,69 @@ function buildOptionsFromArrayColumn(item: any): NormalizedOption[] {
 }
 
 /**
- * Resolve the raw `correct_option` label ('ሀ', 'ለ', 'ሐ', 'መ') to the
- * matching option text. Falls back to the raw label if no option
- * matches, so information is never silently lost.
+ * Resolve a 0-based option index to its text.
+ * Returns `''` when the index is out of range or the option is empty.
  */
-function resolveCorrectAnswerText(
-  rawCorrectLabel: string,
+function resolveCorrectAnswerFromIndex(
+  index: number,
   options: NormalizedOption[]
 ): string {
-  if (rawCorrectLabel === '') return '';
+  if (!Number.isFinite(index)) return '';
+  if (index < 0) return '';
+  if (index >= options.length) return '';
+  return options[index]?.text ?? '';
+}
 
-  const match = options.find((opt) => opt.label === rawCorrectLabel);
-  if (match) return match.text;
+/**
+ * Resolve the legacy `correct_option` value to the matching option text.
+ * Supports (in order of precedence):
+ *   1. Amharic label match ('ሀ' | 'ለ' | 'ሐ' | 'መ')
+ *   2. Latin letter (A/a → 0, B/b → 1, C/c → 2, D/d → 3)
+ *   3. Numeric string ('0' | '1' | '2' | '3')
+ *   4. Direct text match (case-insensitive, trimmed)
+ *   5. Raw fallback (returns the value untouched)
+ */
+function resolveCorrectAnswerText(
+  rawCorrect: string,
+  options: NormalizedOption[]
+): string {
+  if (rawCorrect === '') return '';
 
-  // Fallback: return the raw label as-is.
-  return rawCorrectLabel;
+  // 1. Amharic label match.
+  const byLabel = options.find((opt) => opt.label === rawCorrect);
+  if (byLabel) return byLabel.text;
+
+  // 2. Latin letter → index.
+  const latinIndex = LATIN_TO_INDEX[rawCorrect.toLowerCase()];
+  if (latinIndex !== undefined && options[latinIndex]) {
+    return options[latinIndex].text;
+  }
+
+  // 3. Numeric string → index.
+  if (/^\d+$/.test(rawCorrect)) {
+    const numericIndex = parseInt(rawCorrect, 10);
+    if (numericIndex >= 0 && numericIndex < options.length) {
+      return options[numericIndex].text;
+    }
+  }
+
+  // 4. Direct text match (case-insensitive, trimmed).
+  const needle = rawCorrect.trim().toLowerCase();
+  const byText = options.find(
+    (opt) => opt.text.trim().toLowerCase() === needle
+  );
+  if (byText) return byText.text;
+
+  // 5. Fallback: return the raw value as-is.
+  return rawCorrect;
 }
 
 /**
  * Normalize one raw row coming from Supabase into a uniform shape.
- * Reads `correct_option` (Amharic label) and resolves it to the
- * corresponding option text for uniform scoring.
+ *
+ * Correct-answer resolution priority:
+ *   1. `correct_option_index`  → integer 0..3, maps directly by array position
+ *   2. `correct_option`        → legacy, resolved via labels / letters / text
  */
 function normalizeQuestion(item: any): NormalizedQuestion {
   // (1) Options — discrete columns take priority, else JSON `options`.
@@ -972,14 +1029,30 @@ function normalizeQuestion(item: any): NormalizedQuestion {
     ? buildOptionsFromDiscreteColumns(item)
     : buildOptionsFromArrayColumn(item);
 
-  // (2) Correct answer — read the `correct_option` column.
-  const rawCorrectLabel =
-    item.correct_option === null || item.correct_option === undefined
-      ? ''
-      : String(item.correct_option).trim();
+  // (2) Correct answer resolution — priority: index → legacy option.
+  let correctAnswerText = '';
 
-  // (3) Resolve label → option text for uniform scoring.
-  const correctAnswerText = resolveCorrectAnswerText(rawCorrectLabel, options);
+  const hasValidIndex =
+    item.correct_option_index !== null &&
+    item.correct_option_index !== undefined &&
+    item.correct_option_index !== '' &&
+    !isNaN(Number(item.correct_option_index));
+
+  if (hasValidIndex) {
+    // Primary: `correct_option_index` (integer 0..3).
+    const indexNum = Math.trunc(Number(item.correct_option_index));
+    correctAnswerText = resolveCorrectAnswerFromIndex(indexNum, options);
+  }
+
+  // Fallback / legacy: `correct_option`.
+  if (correctAnswerText === '') {
+    const rawCorrect =
+      item.correct_option === null || item.correct_option === undefined
+        ? ''
+        : String(item.correct_option).trim();
+
+    correctAnswerText = resolveCorrectAnswerText(rawCorrect, options);
+  }
 
   return {
     id: item.id ?? item.question_id ?? Math.random().toString(36).slice(2),
