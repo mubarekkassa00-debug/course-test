@@ -5,11 +5,21 @@
 //
 // Features:
 //   • Loads every row from `public.payments` (newest first).
-//   • Enriches each row with the student's name/email if a public
-//     `profiles` table is available (gracefully skipped otherwise).
+//   • Enriches each row with the student's display name + email by querying
+//     Supabase Auth (`auth.admin.listUsers()`), falling back to a `profiles`
+//     table if either source is unavailable.
 //   • Renders a responsive table (desktop) / card list (mobile).
 //   • Approve / Reject actions mutate the row's `status` in Supabase.
 //   • Loading, empty, and error states are all handled inline.
+//
+// NOTE ON `auth.admin.listUsers()` FROM THE BROWSER
+//   The Auth admin API requires the SERVICE ROLE key. If the browser client in
+//   `@/lib/supabase` was initialized with the anon key (typical default), the
+//   admin call will fail with a 401/403. In that case the enrichment silently
+//   falls back to the `profiles` table and, as a last resort, the string
+//   'Student'. To make the Auth lookup work in production, either (a) use a
+//   dedicated admin client initialized with the service role key, or (b) move
+//   this enrichment behind a server API route.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -39,8 +49,8 @@ type PaymentStatus = 'pending' | 'approved' | 'rejected';
  * Canonical shape of a row in `public.payments`.
  *
  * `studentName` and `studentEmail` are enrichment-only fields populated from
- * the `profiles` table — they are optional because the enrichment query may
- * fail (missing table, RLS, etc.) without breaking the page.
+ * Supabase Auth (`auth.admin.listUsers()`) and/or a `profiles` table — they
+ * are optional because the enrichment may fail without breaking the page.
  */
 interface PaymentRow {
   id: string;
@@ -60,6 +70,18 @@ interface ProfileInfo {
   id: string;
   full_name?: string | null;
   email?: string | null;
+}
+
+/** Shape of the auth user we care about for name/email resolution. */
+interface AuthUserLike {
+  id: string;
+  email?: string | null;
+  user_metadata?: {
+    display_name?: string | null;
+    full_name?: string | null;
+    username?: string | null;
+    [key: string]: unknown;
+  } | null;
 }
 
 type StatusFilter = 'all' | PaymentStatus;
@@ -97,10 +119,29 @@ function formatAmount(amount: number | string | null | undefined): string {
   return `${n} ETB`;
 }
 
-/** Short display for a user id (first 8 chars + ellipsis if longer). */
-function shortUserId(id: string): string {
-  if (!id) return '—';
-  return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+/**
+ * Resolve the primary display name using the requested fallback chain:
+ *   display_name  →  full_name  →  'Student'
+ */
+function resolvePrimaryName(user: AuthUserLike | null | undefined): string {
+  if (!user) return 'Student';
+  const meta = user.user_metadata ?? undefined;
+
+  const displayName =
+    typeof meta?.display_name === 'string' ? meta.display_name.trim() : '';
+  if (displayName !== '') return displayName;
+
+  const fullName =
+    typeof meta?.full_name === 'string' ? meta.full_name.trim() : '';
+  if (fullName !== '') return fullName;
+
+  return 'Student';
+}
+
+/** Extract a trimmed email from an auth user, or '' if unavailable. */
+function resolveEmail(user: AuthUserLike | null | undefined): string {
+  if (!user) return '';
+  return typeof user.email === 'string' ? user.email.trim() : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +244,10 @@ export default function AdminPaymentsPage() {
       // Fallback: if `created_at` isn't part of the schema, retry without
       // the ordering clause so we still show the data.
       let rawData = data;
-      if (payErr && String(payErr.message || '').toLowerCase().includes('created_at')) {
+      if (
+        payErr &&
+        String(payErr.message || '').toLowerCase().includes('created_at')
+      ) {
         const retry = await supabase.from('payments').select('*');
         if (retry.error) throw retry.error;
         rawData = retry.data;
@@ -211,42 +255,113 @@ export default function AdminPaymentsPage() {
         throw payErr;
       }
 
-      // `data` from Supabase is `PaymentRow[] | null`. Normalize to an array
-      // via `?? []` before doing anything else — this is the exact line that
-      // resolves the TypeScript error.
+      // `data` from Supabase is `PaymentRow[] | null`. Normalize to an array.
       const baseRows: PaymentRow[] = (rawData ?? []) as PaymentRow[];
 
       // ---------------------------------------------------------------
-      // 2. Best-effort profile enrichment (public.profiles)
+      // 2. Enrichment — resolve display names + emails for the students.
+      //
+      //    Strategy (best-effort, layered):
+      //      a) Fetch all users via `auth.admin.listUsers()` and build a
+      //         `userId → { name, email }` map. The primary name follows:
+      //            display_name → full_name → 'Student'
+      //      b) Fall back to a `profiles` table for users still missing data.
+      //
+      //    Any failure of (a) or (b) is swallowed so the page still works.
       // ---------------------------------------------------------------
       const uniqueUserIds = Array.from(
         new Set(baseRows.map((r) => r.user_id).filter(Boolean))
       );
 
-      const profileMap = new Map<string, ProfileInfo>();
-      if (uniqueUserIds.length > 0) {
-        const { data: profileData, error: profileErr } = await supabase
-          .from('profiles')
-          .select('id, full_name, email')
-          .in('id', uniqueUserIds);
+      const nameMap = new Map<string, string>();
+      const emailMap = new Map<string, string>();
 
-        if (!profileErr && Array.isArray(profileData)) {
-          for (const p of profileData as ProfileInfo[]) {
-            if (p?.id) profileMap.set(p.id, p);
+      // (a) Supabase Auth — admin.listUsers()
+      try {
+        const { data: authData, error: authErr } =
+          await supabase.auth.admin.listUsers({
+            page: 1,
+            perPage: 1000,
+          });
+
+        if (authErr) {
+          console.warn(
+            '[AdminPayments] auth.admin.listUsers warning:',
+            authErr.message
+          );
+        } else if (authData?.users) {
+          for (const u of authData.users as AuthUserLike[]) {
+            if (!u?.id) continue;
+            nameMap.set(u.id, resolvePrimaryName(u));
+            const email = resolveEmail(u);
+            if (email !== '') emailMap.set(u.id, email);
           }
         }
-        // If the `profiles` table doesn't exist or the query fails, we
-        // simply proceed without names.
+      } catch (authCatch) {
+        console.warn(
+          '[AdminPayments] auth.admin.listUsers unexpected error:',
+          authCatch instanceof Error ? authCatch.message : String(authCatch)
+        );
       }
 
+      // (b) Fallback enrichment via `profiles` table (only for users still
+      //     missing a name or an email after the Auth lookup).
+      const stillMissing = uniqueUserIds.filter((id) => {
+        const name = nameMap.get(id);
+        const email = emailMap.get(id);
+        const hasName = !!name && name !== 'Student';
+        const hasEmail = !!email && email !== '';
+        return !hasName || !hasEmail;
+      });
+
+      if (stillMissing.length > 0) {
+        try {
+          const { data: profileData, error: profileErr } = await supabase
+            .from('profiles')
+            .select('id, full_name, email')
+            .in('id', stillMissing);
+
+          if (!profileErr && Array.isArray(profileData)) {
+            for (const p of profileData as ProfileInfo[]) {
+              if (!p?.id) continue;
+
+              const existingName = nameMap.get(p.id);
+              if (!existingName || existingName === 'Student') {
+                const profileName = (p.full_name ?? '').trim();
+                if (profileName !== '') {
+                  nameMap.set(p.id, profileName);
+                }
+              }
+
+              if (!emailMap.has(p.id)) {
+                const profileEmail = (p.email ?? '').trim();
+                if (profileEmail !== '') {
+                  emailMap.set(p.id, profileEmail);
+                }
+              }
+            }
+          }
+        } catch (profileCatch) {
+          console.warn(
+            '[AdminPayments] profiles fallback warning:',
+            profileCatch instanceof Error
+              ? profileCatch.message
+              : String(profileCatch)
+          );
+        }
+      }
+
+      // ---------------------------------------------------------------
+      // 3. Merge enrichment into rows.
+      // ---------------------------------------------------------------
       const enriched: PaymentRow[] = baseRows.map((r) => ({
         ...r,
-        studentName: (profileMap.get(r.user_id)?.full_name ?? '').trim(),
-        studentEmail: (profileMap.get(r.user_id)?.email ?? '').trim(),
+        studentName: nameMap.get(r.user_id) ?? '',
+        studentEmail: emailMap.get(r.user_id) ?? '',
       }));
 
       // ---------------------------------------------------------------
-      // 3. Commit to state — always a real array, never `null`.
+      // 4. Commit to state — always a real array, never `null`.
       // ---------------------------------------------------------------
       setRows(enriched);
     } catch (err) {
@@ -495,12 +610,20 @@ export default function AdminPaymentsPage() {
                     {filteredRows.map((r) => {
                       const status = normalizeStatus(r.status);
                       const busy = actionId === r.id;
+
+                      // Primary line: display name (or 'Student')
+                      // Secondary line: email (or a muted placeholder)
+                      const primaryName =
+                        (r.studentName && r.studentName.trim()) || 'Student';
+                      const secondaryEmail =
+                        (r.studentEmail && r.studentEmail.trim()) || '';
+
                       return (
                         <tr
                           key={r.id}
                           className="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors"
                         >
-                          {/* Student */}
+                          {/* Student — name + email only, no raw UID */}
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
@@ -508,13 +631,17 @@ export default function AdminPaymentsPage() {
                               </div>
                               <div className="min-w-0">
                                 <p className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
-                                  {r.studentName ||
-                                    r.studentEmail ||
-                                    'Unnamed Student'}
+                                  {primaryName}
                                 </p>
-                                <p className="text-xs text-slate-500 dark:text-slate-400 truncate font-mono">
-                                  {shortUserId(r.user_id)}
-                                </p>
+                                {secondaryEmail ? (
+                                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                                    {secondaryEmail}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs text-slate-400 dark:text-slate-500 italic">
+                                    —
+                                  </p>
+                                )}
                               </div>
                             </div>
                           </td>
@@ -619,6 +746,11 @@ export default function AdminPaymentsPage() {
               {filteredRows.map((r) => {
                 const status = normalizeStatus(r.status);
                 const busy = actionId === r.id;
+                const primaryName =
+                  (r.studentName && r.studentName.trim()) || 'Student';
+                const secondaryEmail =
+                  (r.studentEmail && r.studentEmail.trim()) || '';
+
                 return (
                   <div
                     key={r.id}
@@ -632,13 +764,17 @@ export default function AdminPaymentsPage() {
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                            {r.studentName ||
-                              r.studentEmail ||
-                              'Unnamed Student'}
+                            {primaryName}
                           </p>
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                            {shortUserId(r.user_id)}
-                          </p>
+                          {secondaryEmail ? (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {secondaryEmail}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-slate-400 dark:text-slate-500 italic">
+                              —
+                            </p>
+                          )}
                         </div>
                       </div>
                       <StatusBadge status={status} />
