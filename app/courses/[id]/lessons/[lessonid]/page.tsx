@@ -845,24 +845,21 @@ function parseLessonNumber(
 // ---------------------------------------------------------------------------
 // UNIVERSAL OPTION PARSING
 //
-// Updated for the cleaned Supabase schema, with support for BOTH:
+// Supports BOTH:
 //
 //   1) `correct_option_index` (integer 0 | 1 | 2 | 3) → PRIMARY
 //      Maps directly to options[0] | options[1] | options[2] | options[3].
 //
-//   2) `correct_option` (legacy) → FALLBACK
-//      May contain:
-//        • an Amharic label ('ሀ', 'ለ', 'ሐ', 'መ')
-//        • a Latin letter ('A', 'a', 'B', 'b', ...)
-//        • a numeric string ('0', '1', '2', '3')
-//        • the raw option text
+//   2) `correct_option` (legacy) → FALLBACK #1
+//      May contain: Amharic label, Latin letter, numeric string, or text.
 //
-//   • Options may live in either of two shapes:
-//       A) Discrete columns  → option_a / option_b / option_c / option_d
-//       B) JSON array column → `options` (native array or JSON string)
+//   3) `correct_answer` (legacy full-text) → FALLBACK #2
+//      Used by tables like `arbain_quiz` where the correct answer is stored
+//      as the exact option text. Matching is trim- and case-insensitive.
 //
-// The resolver maps the raw correct-answer reference to the exact option
-// *text* so scoring in the caller is a simple string comparison.
+// Options may live in either of two shapes:
+//   A) Discrete columns  → option_a / option_b / option_c / option_d
+//   B) JSON array column → `options` (native array or JSON string)
 // ---------------------------------------------------------------------------
 const AMHARIC_LABELS = ['ሀ', 'ለ', 'ሐ', 'መ'];
 
@@ -873,6 +870,32 @@ const LATIN_TO_INDEX: Record<string, number> = {
   c: 2,
   d: 3,
 };
+
+/** Return the first candidate that is non-null, non-undefined, non-empty. */
+function pickFirstNonEmpty(...values: unknown[]): string {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text !== '') return text;
+  }
+  return '';
+}
+
+/** Normalize a string for safe comparison (trim + lowercase). */
+function normalizeForCompare(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+/**
+ * Return true when two answer strings match after trimming and lowercasing.
+ * Empty strings never match, which prevents spurious "correct" scores.
+ */
+function areAnswersEqual(a: unknown, b: unknown): boolean {
+  const left = normalizeForCompare(a);
+  const right = normalizeForCompare(b);
+  if (left === '' || right === '') return false;
+  return left === right;
+}
 
 /**
  * Safely parse an `options` column value. Accepts:
@@ -967,12 +990,13 @@ function resolveCorrectAnswerFromIndex(
 }
 
 /**
- * Resolve the legacy `correct_option` value to the matching option text.
+ * Resolve a raw correct-answer value to the matching option text.
+ *
  * Supports (in order of precedence):
  *   1. Amharic label match ('ሀ' | 'ለ' | 'ሐ' | 'መ')
  *   2. Latin letter (A/a → 0, B/b → 1, C/c → 2, D/d → 3)
  *   3. Numeric string ('0' | '1' | '2' | '3')
- *   4. Direct text match (case-insensitive, trimmed)
+ *   4. Direct text match (trim + case-insensitive)
  *   5. Raw fallback (returns the value untouched)
  */
 function resolveCorrectAnswerText(
@@ -999,10 +1023,10 @@ function resolveCorrectAnswerText(
     }
   }
 
-  // 4. Direct text match (case-insensitive, trimmed).
-  const needle = rawCorrect.trim().toLowerCase();
+  // 4. Direct text match (trim + case-insensitive).
+  const needle = normalizeForCompare(rawCorrect);
   const byText = options.find(
-    (opt) => opt.text.trim().toLowerCase() === needle
+    (opt) => normalizeForCompare(opt.text) === needle
   );
   if (byText) return byText.text;
 
@@ -1016,6 +1040,10 @@ function resolveCorrectAnswerText(
  * Correct-answer resolution priority:
  *   1. `correct_option_index`  → integer 0..3, maps directly by array position
  *   2. `correct_option`        → legacy, resolved via labels / letters / text
+ *   3. `correct_answer`        → legacy full-text (e.g. `arbain_quiz`),
+ *                                resolved via the same label / letter / text
+ *                                chain. If it already *is* the option text,
+ *                                it will match directly in step 4 above.
  */
 function normalizeQuestion(item: any): NormalizedQuestion {
   // (1) Options — discrete columns take priority, else JSON `options`.
@@ -1029,7 +1057,7 @@ function normalizeQuestion(item: any): NormalizedQuestion {
     ? buildOptionsFromDiscreteColumns(item)
     : buildOptionsFromArrayColumn(item);
 
-  // (2) Correct answer resolution — priority: index → legacy option.
+  // (2) Correct answer resolution — priority: index → correct_option → correct_answer.
   let correctAnswerText = '';
 
   const hasValidIndex =
@@ -1044,12 +1072,12 @@ function normalizeQuestion(item: any): NormalizedQuestion {
     correctAnswerText = resolveCorrectAnswerFromIndex(indexNum, options);
   }
 
-  // Fallback / legacy: `correct_option`.
+  // Fallback #1 / #2: `correct_option` then `correct_answer`.
   if (correctAnswerText === '') {
-    const rawCorrect =
-      item.correct_option === null || item.correct_option === undefined
-        ? ''
-        : String(item.correct_option).trim();
+    const rawCorrect = pickFirstNonEmpty(
+      item.correct_option,
+      item.correct_answer
+    );
 
     correctAnswerText = resolveCorrectAnswerText(rawCorrect, options);
   }
@@ -1358,6 +1386,12 @@ export default function LessonPage() {
   // ------------------------------------------------------------------
   // Submit → save score to `quiz_results` via upsert.
   // onConflict target: (user_id, course_id, lesson_id)
+  //
+  // Scoring compares the user's selected option *text* against the
+  // normalized `correctAnswerText` using `areAnswersEqual`, which trims
+  // and lowercases both sides — this prevents false 0 scores caused by
+  // stray whitespace or case differences between `correct_answer` and
+  // the option text stored in `arbain_quiz`.
   // ------------------------------------------------------------------
   const handleSubmitQuiz = async () => {
     if (!questions.length || !lesson || submittingQuiz) return;
@@ -1366,7 +1400,7 @@ export default function LessonPage() {
 
     const correctCount = questions.reduce((acc, q) => {
       const selected = selectedAnswers[String(q.id)];
-      return selected && selected === q.correctAnswerText ? acc + 1 : acc;
+      return areAnswersEqual(selected, q.correctAnswerText) ? acc + 1 : acc;
     }, 0);
 
     const total = questions.length;
