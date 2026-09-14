@@ -61,24 +61,59 @@ const PAGE_H = 595.28;
 const FALLBACK_STUDENT_NAME = 'kassa';
 
 // ---------------------------------------------------------------------------
-// Service-role Supabase client (bypasses RLS + can read Auth admin APIs)
+// Supabase client (lazy, cached) — service-role with anon-key fallback
+//
+// Resolves credentials in this order:
+//   1. SUPABASE_SERVICE_ROLE_KEY  (full access — Auth admin APIs available)
+//   2. NEXT_PUBLIC_SUPABASE_ANON_KEY  (fallback — Auth admin skipped)
+//
+// The fallback means the route no longer throws a 500 "Server misconfigured"
+// response in environments where only the anon key is provided.
 // ---------------------------------------------------------------------------
 
-let cachedAdmin: SupabaseClient | null = null;
+let cachedClient: SupabaseClient | null = null;
+let cachedClientMode: 'service' | 'anon' | null = null;
 
-function getAdmin(): SupabaseClient {
-  if (cachedAdmin) return cachedAdmin;
+function getSupabaseClient(): {
+  client: SupabaseClient;
+  mode: 'service' | 'anon';
+} {
+  if (cachedClient && cachedClientMode) {
+    return { client: cachedClient, mode: cachedClientMode };
+  }
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!url) throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL');
-  if (!key) throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY');
+  if (!url) {
+    throw new Error(
+      'Missing NEXT_PUBLIC_SUPABASE_URL environment variable.'
+    );
+  }
 
-  cachedAdmin = createClient(url.replace(/\/+$/, ''), key, {
+  const chosenKey = serviceKey || anonKey;
+  const mode: 'service' | 'anon' = serviceKey ? 'service' : 'anon';
+
+  if (!chosenKey) {
+    throw new Error(
+      'Missing both SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_ANON_KEY — at least one is required.'
+    );
+  }
+
+  if (!serviceKey) {
+    console.warn(
+      '[generate-certificate] SUPABASE_SERVICE_ROLE_KEY not set — falling back to NEXT_PUBLIC_SUPABASE_ANON_KEY. ' +
+        'Auth admin APIs (getUserById) will be skipped; the display name will use the fallback.'
+    );
+  }
+
+  cachedClient = createClient(url.replace(/\/+$/, ''), chosenKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
-  return cachedAdmin;
+  cachedClientMode = mode;
+
+  return { client: cachedClient, mode };
 }
 
 // ---------------------------------------------------------------------------
@@ -325,39 +360,55 @@ export async function POST(request: Request) {
 
   const safeUserId = sanitizeUserId(userId);
 
-  // ---------- 2. Obtain service-role client ----------
+  // ---------- 2. Obtain Supabase client (service role or anon fallback) ----------
   let supabase: SupabaseClient;
+  let clientMode: 'service' | 'anon';
   try {
-    supabase = getAdmin();
+    const resolved = getSupabaseClient();
+    supabase = resolved.client;
+    clientMode = resolved.mode;
   } catch (envErr) {
-    console.error('[generate-certificate] admin init error:', envErr);
+    console.error('[generate-certificate] Supabase init error:', envErr);
     return NextResponse.json(
-      { eligible: false, error: 'Server misconfigured.' },
+      {
+        eligible: false,
+        error:
+          'Server misconfigured: Supabase credentials are missing. ' +
+          'Set NEXT_PUBLIC_SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_ANON_KEY.',
+      },
       { status: 500 }
     );
   }
 
   // ---------- 3. Fetch the user's display name from Supabase Auth ----------
+  //   Only attempt the Auth admin API when we actually have the service
+  //   role key — otherwise skip silently and use the fallback name.
   let studentName = FALLBACK_STUDENT_NAME;
-  try {
-    const { data: userData, error: userErr } =
-      await supabase.auth.admin.getUserById(userId);
+  if (clientMode === 'service') {
+    try {
+      const { data: userData, error: userErr } =
+        await supabase.auth.admin.getUserById(userId);
 
-    if (userErr) {
+      if (userErr) {
+        console.warn(
+          '[generate-certificate] getUserById warning:',
+          userErr.message
+        );
+        // Non-fatal: fall back to the default name.
+      } else {
+        studentName = resolveStudentName(userData?.user);
+      }
+    } catch (userCatch) {
       console.warn(
-        '[generate-certificate] getUserById warning:',
-        userErr.message
+        '[generate-certificate] getUserById unexpected error:',
+        userCatch instanceof Error ? userCatch.message : String(userCatch)
       );
       // Non-fatal: fall back to the default name.
-    } else {
-      studentName = resolveStudentName(userData?.user);
     }
-  } catch (userCatch) {
+  } else {
     console.warn(
-      '[generate-certificate] getUserById unexpected error:',
-      userCatch instanceof Error ? userCatch.message : String(userCatch)
+      '[generate-certificate] Anon key in use — skipping Auth admin lookup; using fallback display name.'
     );
-    // Non-fatal: fall back to the default name.
   }
 
   // ---------- 4. Verify payment approval ----------
@@ -506,7 +557,12 @@ export async function POST(request: Request) {
       studentName,
       issuedAt: issueDate.toISOString(),
     },
-    { status: 200 }
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }
   );
 }
 
