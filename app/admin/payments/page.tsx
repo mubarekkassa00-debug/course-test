@@ -5,9 +5,13 @@
 //
 // Features:
 //   • Loads every row from `public.payments` (newest first).
-//   • Enriches each row with the student's display name + email by querying
-//     Supabase Auth (`auth.admin.listUsers()`), falling back to a `profiles`
-//     table if either source is unavailable.
+//   • Enriches each row with the student's display name + email using a
+//     layered strategy:
+//       1) `public.profiles` (full_name / display_name) — primary source.
+//       2) Supabase Auth user metadata
+//          (user_metadata.display_name → full_name → name).
+//       3) Email prefix (before '@'), first letter capitalized.
+//       4) Only as a last resort: the literal string 'Student'.
 //   • Renders a responsive table (desktop) / card list (mobile).
 //   • Approve / Reject actions mutate the row's `status` in Supabase.
 //   • Loading, empty, and error states are all handled inline.
@@ -16,10 +20,10 @@
 //   The Auth admin API requires the SERVICE ROLE key. If the browser client in
 //   `@/lib/supabase` was initialized with the anon key (typical default), the
 //   admin call will fail with a 401/403. In that case the enrichment silently
-//   falls back to the `profiles` table and, as a last resort, the string
-//   'Student'. To make the Auth lookup work in production, either (a) use a
-//   dedicated admin client initialized with the service role key, or (b) move
-//   this enrichment behind a server API route.
+//   falls back to the `profiles` table and, as a last resort, to the email
+//   prefix / 'Student'. To make the Auth lookup work in production, either
+//   (a) use a dedicated admin client initialized with the service role key, or
+//   (b) move this enrichment behind a server API route.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -49,8 +53,8 @@ type PaymentStatus = 'pending' | 'approved' | 'rejected';
  * Canonical shape of a row in `public.payments`.
  *
  * `studentName` and `studentEmail` are enrichment-only fields populated from
- * Supabase Auth (`auth.admin.listUsers()`) and/or a `profiles` table — they
- * are optional because the enrichment may fail without breaking the page.
+ * `public.profiles`, Supabase Auth metadata, and/or the user's email prefix —
+ * they are optional because the enrichment may fail without breaking the page.
  */
 interface PaymentRow {
   id: string;
@@ -69,6 +73,7 @@ interface PaymentRow {
 interface ProfileInfo {
   id: string;
   full_name?: string | null;
+  display_name?: string | null;
   email?: string | null;
 }
 
@@ -79,6 +84,7 @@ interface AuthUserLike {
   user_metadata?: {
     display_name?: string | null;
     full_name?: string | null;
+    name?: string | null;
     username?: string | null;
     [key: string]: unknown;
   } | null;
@@ -120,22 +126,41 @@ function formatAmount(amount: number | string | null | undefined): string {
 }
 
 /**
- * Resolve the primary display name using the requested fallback chain:
- *   display_name  →  full_name  →  'Student'
+ * Resolve a display name from Supabase Auth user metadata.
+ *
+ * Priority within metadata:
+ *   display_name  →  full_name  →  name
+ *
+ * Returns '' when nothing usable is present.
  */
-function resolvePrimaryName(user: AuthUserLike | null | undefined): string {
-  if (!user) return 'Student';
-  const meta = user.user_metadata ?? undefined;
+function resolveNameFromMetadata(
+  meta: AuthUserLike['user_metadata']
+): string {
+  if (!meta) return '';
+  const candidates: unknown[] = [meta.display_name, meta.full_name, meta.name];
+  for (const c of candidates) {
+    if (typeof c === 'string') {
+      const trimmed = c.trim();
+      if (trimmed !== '') return trimmed;
+    }
+  }
+  return '';
+}
 
-  const displayName =
-    typeof meta?.display_name === 'string' ? meta.display_name.trim() : '';
-  if (displayName !== '') return displayName;
-
-  const fullName =
-    typeof meta?.full_name === 'string' ? meta.full_name.trim() : '';
-  if (fullName !== '') return fullName;
-
-  return 'Student';
+/**
+ * Derive a human-readable display name from an email address.
+ * Takes the part before '@' and capitalizes the first letter.
+ *   "abebe@gmail.com"  →  "Abebe"
+ *   "john.doe@x.io"    →  "John.doe"
+ */
+function nameFromEmail(email: string | null | undefined): string {
+  if (typeof email !== 'string') return '';
+  const trimmed = email.trim();
+  if (trimmed === '') return '';
+  const at = trimmed.indexOf('@');
+  const prefix = (at > 0 ? trimmed.slice(0, at) : trimmed).trim();
+  if (prefix === '') return '';
+  return prefix.charAt(0).toUpperCase() + prefix.slice(1);
 }
 
 /** Extract a trimmed email from an auth user, or '' if unavailable. */
@@ -261,22 +286,75 @@ export default function AdminPaymentsPage() {
       // ---------------------------------------------------------------
       // 2. Enrichment — resolve display names + emails for the students.
       //
-      //    Strategy (best-effort, layered):
-      //      a) Fetch all users via `auth.admin.listUsers()` and build a
-      //         `userId → { name, email }` map. The primary name follows:
-      //            display_name → full_name → 'Student'
-      //      b) Fall back to a `profiles` table for users still missing data.
+      //    Name resolution priority (strict):
+      //      a) `public.profiles.full_name` / `display_name`
+      //      b) Supabase Auth metadata:
+      //           user_metadata.display_name → full_name → name
+      //      c) Email prefix before '@' (first letter capitalized)
+      //      d) 'Student' (only when absolutely nothing else exists)
       //
-      //    Any failure of (a) or (b) is swallowed so the page still works.
+      //    Email resolution priority:
+      //      a) Supabase Auth `user.email` (canonical)
+      //      b) `public.profiles.email`
+      //
+      //    Every network call is best-effort — failures are swallowed so the
+      //    page still renders with whatever data is available.
       // ---------------------------------------------------------------
       const uniqueUserIds = Array.from(
         new Set(baseRows.map((r) => r.user_id).filter(Boolean))
       );
 
-      const nameMap = new Map<string, string>();
-      const emailMap = new Map<string, string>();
+      const profileNameMap = new Map<string, string>();
+      const profileEmailMap = new Map<string, string>();
+      const authNameMap = new Map<string, string>();
+      const authEmailMap = new Map<string, string>();
 
-      // (a) Supabase Auth — admin.listUsers()
+      // (a) Profiles — primary source for names.
+      if (uniqueUserIds.length > 0) {
+        try {
+          // Use `select('*')` to stay resilient to schema drift (e.g. tables
+          // that only have `full_name` and not `display_name`, or vice versa).
+          const { data: profileData, error: profileErr } = await supabase
+            .from('profiles')
+            .select('*')
+            .in('id', uniqueUserIds);
+
+          if (profileErr) {
+            console.warn(
+              '[AdminPayments] profiles fetch warning:',
+              profileErr.message
+            );
+          } else if (Array.isArray(profileData)) {
+            for (const p of profileData as ProfileInfo[]) {
+              if (!p?.id) continue;
+
+              // Priority inside profiles: full_name → display_name.
+              const fullName =
+                typeof p.full_name === 'string' ? p.full_name.trim() : '';
+              const displayName =
+                typeof p.display_name === 'string'
+                  ? p.display_name.trim()
+                  : '';
+              const name = fullName || displayName;
+              if (name !== '') profileNameMap.set(p.id, name);
+
+              const email =
+                typeof p.email === 'string' ? p.email.trim() : '';
+              if (email !== '') profileEmailMap.set(p.id, email);
+            }
+          }
+        } catch (profileCatch) {
+          console.warn(
+            '[AdminPayments] profiles fetch unexpected error:',
+            profileCatch instanceof Error
+              ? profileCatch.message
+              : String(profileCatch)
+          );
+        }
+      }
+
+      // (b) Supabase Auth — admin.listUsers() (secondary source for names,
+      //     primary source for emails).
       try {
         const { data: authData, error: authErr } =
           await supabase.auth.admin.listUsers({
@@ -292,9 +370,12 @@ export default function AdminPaymentsPage() {
         } else if (authData?.users) {
           for (const u of authData.users as AuthUserLike[]) {
             if (!u?.id) continue;
-            nameMap.set(u.id, resolvePrimaryName(u));
+
+            const metaName = resolveNameFromMetadata(u.user_metadata);
+            if (metaName !== '') authNameMap.set(u.id, metaName);
+
             const email = resolveEmail(u);
-            if (email !== '') emailMap.set(u.id, email);
+            if (email !== '') authEmailMap.set(u.id, email);
           }
         }
       } catch (authCatch) {
@@ -304,51 +385,22 @@ export default function AdminPaymentsPage() {
         );
       }
 
-      // (b) Fallback enrichment via `profiles` table (only for users still
-      //     missing a name or an email after the Auth lookup).
-      const stillMissing = uniqueUserIds.filter((id) => {
-        const name = nameMap.get(id);
-        const email = emailMap.get(id);
-        const hasName = !!name && name !== 'Student';
-        const hasEmail = !!email && email !== '';
-        return !hasName || !hasEmail;
-      });
+      // (c) Merge into final name + email maps using the strict priority
+      //     order described above.
+      const nameMap = new Map<string, string>();
+      const emailMap = new Map<string, string>();
 
-      if (stillMissing.length > 0) {
-        try {
-          const { data: profileData, error: profileErr } = await supabase
-            .from('profiles')
-            .select('id, full_name, email')
-            .in('id', stillMissing);
+      for (const id of uniqueUserIds) {
+        const profileName = profileNameMap.get(id) ?? '';
+        const authName = authNameMap.get(id) ?? '';
+        const email = authEmailMap.get(id) || profileEmailMap.get(id) || '';
+        const emailName = nameFromEmail(email);
 
-          if (!profileErr && Array.isArray(profileData)) {
-            for (const p of profileData as ProfileInfo[]) {
-              if (!p?.id) continue;
+        const finalName =
+          profileName || authName || emailName || 'Student';
 
-              const existingName = nameMap.get(p.id);
-              if (!existingName || existingName === 'Student') {
-                const profileName = (p.full_name ?? '').trim();
-                if (profileName !== '') {
-                  nameMap.set(p.id, profileName);
-                }
-              }
-
-              if (!emailMap.has(p.id)) {
-                const profileEmail = (p.email ?? '').trim();
-                if (profileEmail !== '') {
-                  emailMap.set(p.id, profileEmail);
-                }
-              }
-            }
-          }
-        } catch (profileCatch) {
-          console.warn(
-            '[AdminPayments] profiles fallback warning:',
-            profileCatch instanceof Error
-              ? profileCatch.message
-              : String(profileCatch)
-          );
-        }
+        nameMap.set(id, finalName);
+        if (email !== '') emailMap.set(id, email);
       }
 
       // ---------------------------------------------------------------

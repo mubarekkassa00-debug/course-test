@@ -19,13 +19,13 @@ import {
   Sun,
   Moon,
   Calendar,
-  Quote,
   CheckCircle2,
   Circle,
   Award,
   Clock,
   Download,
   AlertTriangle,
+  Send,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -36,11 +36,6 @@ type DashboardUser = {
   id?: string;
   email?: string;
   full_name?: string;
-};
-
-type Hadith = {
-  text: string;
-  source: string;
 };
 
 type CourseStatus = 'not_started' | 'in_progress' | 'passed';
@@ -79,30 +74,6 @@ const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
 
 /** Minimum percentage required to pass a course (matches backend). */
 const PASS_THRESHOLD_PERCENT = 50;
-
-// Daily rotating ahadith (Amharic)
-const ahadith: Hadith[] = [
-  {
-    text: '“ተግባራት ሁሉ የሚመዘኑት በኒያ (ዓላማ) ነው፤ ለእያንዳንዱም ሰው ያሰበው ነገር ብቻ ይመለሳል።”',
-    source: 'ቡኻሪና ሙስሊም',
-  },
-  {
-    text: '“ሙእሚን አንድ ሙእሚን ወንድሙን እንደ አንድ ግድግዳ የሚደግፍ ነው።”',
-    source: 'ቡኻሪና ሙስሊም',
-  },
-  {
-    text: '“ከእናንተ በላጩ ቁርአንን የተማረና ያስተማረ ነው።”',
-    source: 'ቡኻሪ',
-  },
-  {
-    text: '“ማንም በምድር ላይ ያለ አንድ ችግር ያለበትን ቢያቀልልለት አላህ የትንሣኤውን ችግር ያቀልልለታል።”',
-    source: 'ሙስሊም',
-  },
-  {
-    text: '“ጠንካራ ሙእሚን ከደካማ ሙእሚን ይልቅ በአላህ ዘንድ የተወደደና የተሻለ ነው።”',
-    source: 'ሙስሊም',
-  },
-];
 
 // Amharic month names for Hijri calendar (1-indexed)
 const hijriMonthsAmh: string[] = [
@@ -156,18 +127,6 @@ function getHijriDate(): string {
     const fallbackDay = now.getDate();
     return `${fallbackDay} ሙሐረም 1448 ዓ.ሂ`;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Daily Hadith index (day of year)
-// ---------------------------------------------------------------------------
-function getDailyHadithIndex(): number {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), 0, 0);
-  const diff = now.getTime() - start.getTime();
-  const oneDay = 1000 * 60 * 60 * 24;
-  const dayOfYear = Math.floor(diff / oneDay);
-  return dayOfYear % ahadith.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +203,6 @@ export default function DashboardPage() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [hijriDate, setHijriDate] = useState('');
-  const [hadithIndex, setHadithIndex] = useState(0);
 
   // Progress + payment state
   const [courseProgress, setCourseProgress] = useState<CourseProgress[]>([]);
@@ -316,10 +274,9 @@ export default function DashboardPage() {
     fetchUser();
   }, [router]);
 
-  // ---------- Hijri date & daily hadith ----------
+  // ---------- Hijri date ----------
   useEffect(() => {
     setHijriDate(getHijriDate());
-    setHadithIndex(getDailyHadithIndex());
   }, []);
 
   // ---------- Fetch course progress ----------
@@ -582,8 +539,6 @@ export default function DashboardPage() {
     );
   }
 
-  const currentHadith = ahadith[hadithIndex];
-
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
@@ -595,8 +550,8 @@ export default function DashboardPage() {
           : 'bg-slate-50 text-slate-900'
       }`}
     >
-      {/* Header */}
-      <header className="bg-white dark:bg-slate-800 shadow-sm border-b border-slate-200 dark:border-slate-700">
+      {/* Sticky Header */}
+      <header className="sticky top-0 z-50 bg-white dark:bg-slate-800 shadow-sm border-b border-slate-200 dark:border-slate-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900">
@@ -650,44 +605,58 @@ export default function DashboardPage() {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 pb-12">
-        {/* Welcome Banner with Hijri Date */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-emerald-100 dark:border-slate-700 p-6 sm:p-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
-              እንኳን ደህና መጡ፣ {user?.full_name || 'ተማሪ'}!{' '}
-              <Sparkles className="inline h-6 w-6 text-amber-400" />
-            </h2>
-            <p className="text-slate-600 dark:text-slate-400 mt-1">
-              የእውቀት ጉዞዎን ይቀጥሉ።
-            </p>
-          </div>
-          <div className="flex-shrink-0 flex items-center gap-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl px-4 py-2">
+        {/* ============================================================ */}
+        {/* WELCOME BANNER (Hijri date on top, greeting below)           */}
+        {/* ============================================================ */}
+        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-emerald-100 dark:border-slate-700 p-6 sm:p-8 flex flex-col gap-4">
+          <div className="self-start inline-flex items-center gap-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl px-4 py-2">
             <Calendar className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
             <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
               ዛሬ፡ {hijriDate}
             </span>
           </div>
+
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+            እንኳን ደህና መጡ፣ {user?.full_name || 'ተማሪ'}!{' '}
+            <Sparkles className="inline h-6 w-6 text-amber-400" />
+          </h2>
         </div>
 
-        {/* Daily Hadith */}
-        <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-amber-100 dark:border-amber-900/50 p-6">
-          <div className="flex items-start gap-4">
-            <div className="flex-shrink-0 mt-1">
-              <Quote className="h-8 w-8 text-amber-500" />
+        {/* ============================================================ */}
+        {/* TELEGRAM CHANNEL CARD                                        */}
+        {/* ============================================================ */}
+        {/*
+          TODO: Replace the `href="#"` below with your real Telegram channel link.
+          Example:
+            href="https://t.me/YourChannelName"
+            href="YOUR_TELEGRAM_LINK_HERE"
+        */}
+        <a
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-6 group block rounded-2xl border border-sky-200 dark:border-sky-900/60 bg-gradient-to-br from-sky-50 via-white to-sky-50 dark:from-sky-950/40 dark:via-slate-800 dark:to-sky-950/40 p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
+        >
+          <div className="flex items-center gap-4">
+            <div
+              className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl shadow-sm"
+              style={{ backgroundColor: '#0088cc' }}
+            >
+              <Send className="h-6 w-6 text-white" />
             </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-amber-200 mb-2">
-                የዕለቱ ሐዲስ
+            <div className="flex-1 min-w-0">
+              <h3 className="text-base sm:text-lg font-bold text-sky-900 dark:text-sky-100">
+                የቴሌግራም ቻናላችንን ይቀላቀሉ
               </h3>
-              <p className="text-slate-700 dark:text-slate-300 leading-relaxed text-base sm:text-lg">
-                {currentHadith.text}
-              </p>
-              <p className="mt-2 text-sm text-amber-600 dark:text-amber-400 font-medium">
-                — {currentHadith.source}
+              <p className="mt-0.5 text-xs sm:text-sm text-sky-800/80 dark:text-sky-200/80">
+                አዳዲስ ትምህርቶችንና ማሳሰቢያዎችን በቴሌግራም ያግኙ።
               </p>
             </div>
+            <span className="hidden sm:inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1.5 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
+              Join
+            </span>
           </div>
-        </div>
+        </a>
 
         {/* ============================================================ */}
         {/* PAYMENT GATE                                                 */}
@@ -778,7 +747,7 @@ export default function DashboardPage() {
               </span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 md:gap-4">
               {courseProgress.map((c) => {
                 const isPassed = c.status === 'passed';
                 const isInProgress = c.status === 'in_progress';
@@ -786,7 +755,7 @@ export default function DashboardPage() {
                   <div
                     key={c.slug}
                     className={[
-                      'flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors',
+                      'flex items-center gap-2 sm:gap-3 rounded-xl border px-3 py-3 sm:px-4 transition-colors',
                       isPassed
                         ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30'
                         : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/40',
@@ -794,27 +763,27 @@ export default function DashboardPage() {
                   >
                     <div className="flex-shrink-0">
                       {isPassed ? (
-                        <CheckCircle2 className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+                        <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
                       ) : isInProgress ? (
-                        <Clock className="h-6 w-6 text-amber-500" />
+                        <Clock className="h-5 w-5 sm:h-6 sm:w-6 text-amber-500" />
                       ) : (
-                        <Circle className="h-6 w-6 text-slate-300 dark:text-slate-600" />
+                        <Circle className="h-5 w-5 sm:h-6 sm:w-6 text-slate-300 dark:text-slate-600" />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
+                      <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
                         {c.displayName}
                       </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                      <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
                         {isPassed
                           ? `ተሳክቷል · ${c.bestPercent}%`
                           : isInProgress
-                          ? `በሂደት ላይ · ${c.bestPercent}% / ${PASS_THRESHOLD_PERCENT}%`
+                          ? `በሂደት · ${c.bestPercent}% / ${PASS_THRESHOLD_PERCENT}%`
                           : 'አልተጀመረም'}
                       </p>
                     </div>
                     {isPassed && (
-                      <span className="flex-shrink-0 rounded-full bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5">
+                      <span className="hidden sm:inline-flex flex-shrink-0 rounded-full bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5">
                         PASS
                       </span>
                     )}
@@ -848,9 +817,6 @@ export default function DashboardPage() {
                       የምስክር ወረቀትዎን ማውረድ ይችላሉ።
                     </p>
 
-                    {/* ------------------------------------------------ */}
-                    {/* Download Certificate button                       */}
-                    {/* ------------------------------------------------ */}
                     <button
                       type="button"
                       onClick={handleDownloadCertificate}
@@ -884,7 +850,6 @@ export default function DashboardPage() {
                       )}
                     </button>
 
-                    {/* Error banner */}
                     {certError && !certLoading && (
                       <div
                         role="alert"
@@ -902,7 +867,6 @@ export default function DashboardPage() {
                       </div>
                     )}
 
-                    {/* Success banner */}
                     {certSuccess && !certLoading && !certError && (
                       <div
                         role="status"
@@ -957,7 +921,7 @@ export default function DashboardPage() {
         )}
 
         {/* ============================================================ */}
-        {/* 4 LEARNING PILLARS                                          */}
+        {/* 4 LEARNING PILLARS (2-column grid)                          */}
         {/* ============================================================ */}
         <div className="mt-8">
           <div className="flex items-center gap-2 mb-6">
@@ -972,14 +936,14 @@ export default function DashboardPage() {
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 gap-3 md:gap-4">
             {/* 1. የላቁ ኮርሶች */}
             <Link
               href={isPaymentApproved ? '/courses' : '#'}
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
                   ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
@@ -995,19 +959,19 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="absolute top-4 right-4">
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+              <div className="absolute top-3 right-3 sm:top-4 sm:right-4">
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-[10px] sm:text-xs font-semibold text-amber-700 dark:text-amber-300">
                   <Lock className="h-3 w-3" />
                   የተከፈለ
                 </span>
               </div>
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 dark:bg-amber-900/20 mb-4">
-                <BookOpen className="h-7 w-7 text-amber-600 dark:text-amber-400" />
+              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-amber-50 dark:bg-amber-900/20 mb-3 sm:mb-4">
+                <BookOpen className="h-6 w-6 sm:h-7 sm:w-7 text-amber-600 dark:text-amber-400" />
               </div>
-              <h4 className="text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 የላቁ ኮርሶች
               </h4>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የተከፈሉና የላቁ ኮርሶች ከምሁራን ጋር።
               </p>
             </Link>
@@ -1018,7 +982,7 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
                   ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
@@ -1034,13 +998,13 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 mb-4">
-                <Mic className="h-7 w-7 text-emerald-600 dark:text-emerald-400" />
+              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 mb-3 sm:mb-4">
+                <Mic className="h-6 w-6 sm:h-7 sm:w-7 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <h4 className="text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 የቁርአን ማዕከል
               </h4>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የቃሪዎች ማዕከል – ተጅዊድና ንባብ ልምምድ።
               </p>
             </Link>
@@ -1051,7 +1015,7 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
                   ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
@@ -1067,13 +1031,13 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 dark:bg-blue-900/20 mb-4">
-                <GraduationCap className="h-7 w-7 text-blue-600 dark:text-blue-400" />
+              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-blue-50 dark:bg-blue-900/20 mb-3 sm:mb-4">
+                <GraduationCap className="h-6 w-6 sm:h-7 sm:w-7 text-blue-600 dark:text-blue-400" />
               </div>
-              <h4 className="text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 ዳዕዋዎችና ሙሐደራዎች
               </h4>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የሀገር ውስጥና ዓለም አቀፍ እስላማዊ ትምህርቶች።
               </p>
             </Link>
@@ -1084,7 +1048,7 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
                   ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
@@ -1100,13 +1064,13 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-50 dark:bg-purple-900/20 mb-4">
-                <Library className="h-7 w-7 text-purple-600 dark:text-purple-400" />
+              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-purple-50 dark:bg-purple-900/20 mb-3 sm:mb-4">
+                <Library className="h-6 w-6 sm:h-7 sm:w-7 text-purple-600 dark:text-purple-400" />
               </div>
-              <h4 className="text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 ዲጂታል ቤተ-መጽሐፍት
               </h4>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 ፒዲኤፍ መጻሕፍትና ንባብ ማዕከል።
               </p>
             </Link>

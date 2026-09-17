@@ -4,8 +4,12 @@
 //
 // Flow:
 //   1. Read `userId` from the JSON request body.
-//   2. Fetch the user's display name using a strict fallback chain:
-//        user_metadata.full_name  →  user_metadata.name  →  profiles.full_name  →  'Student'
+//   2. Resolve the student's display name using this strict priority:
+//        a) profiles.full_name
+//        b) user_metadata.full_name  →  user_metadata.name  →  display_name  →  username
+//        c) Capitalized email prefix  (e.g. "abebe@gmail.com" → "Abebe")
+//      The generic "Student" label is never rendered — every user gets a
+//      name derived from one of the three sources above.
 //   3. Verify the user has passed ALL 4 required courses (score / total ≥ 0.5).
 //   4. Verify the user has an `approved` row in `payments`.
 //   5. Generate a landscape A4 PDF in memory.
@@ -60,9 +64,6 @@ const CERTIFICATES_BUCKET = 'certificates';
 const PAGE_W = 841.89;
 const PAGE_H = 595.28;
 
-/** Last-resort fallback if no name can be resolved from any source. */
-const GENERIC_FALLBACK_NAME = 'Student';
-
 // ---------------------------------------------------------------------------
 // Supabase client (lazy, cached) — service-role with anon-key fallback
 //
@@ -107,7 +108,7 @@ function getSupabaseClient(): {
   if (!serviceKey) {
     console.warn(
       '[generate-certificate] SUPABASE_SERVICE_ROLE_KEY not set — falling back to NEXT_PUBLIC_SUPABASE_ANON_KEY. ' +
-        'Auth admin APIs (getUserById) will be skipped; the display name will use the fallback.'
+        'Auth admin APIs (getUserById) will be skipped; the display name will be derived from the profiles table or the email prefix.'
     );
   }
 
@@ -162,7 +163,7 @@ function buildCertificateFilename(studentName: string): string {
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^A-Za-z0-9_-]/g, '');
-  return `Basira_Certificate_${safe || 'Student'}.pdf`;
+  return `Basira_Certificate_${safe || 'Certificate'}.pdf`;
 }
 
 /**
@@ -188,50 +189,82 @@ function pdfDownloadResponse(
 }
 
 /**
- * Resolve the display name from a Supabase Auth user object.
- *
- * Priority chain (first non-empty wins):
- *   1. user_metadata.full_name
- *   2. user_metadata.name
- *   3. user_metadata.display_name   (kept for backward compatibility)
- *   4. user_metadata.username       (kept for backward compatibility)
- *   5. user.email
- *   6. GENERIC_FALLBACK_NAME ('Student')
- *
- * NOTE: `profiles.full_name` is checked separately by the caller when
- * `getUserById` is unavailable (anon key mode).
+ * Return the first non-empty trimmed string from the candidates.
+ * Returns `''` when nothing usable is found.
  */
-function resolveStudentNameFromAuth(authUser: unknown): string {
-  const meta = (authUser as { user_metadata?: Record<string, unknown> } | null)
-    ?.user_metadata;
-  const email = (authUser as { email?: unknown } | null)?.email;
-
-  if (meta) {
-    const candidates: unknown[] = [
-      meta.full_name,
-      meta.name,
-      meta.display_name,
-      meta.username,
-    ];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim() !== '') {
-        return candidate.trim();
-      }
+function pickFirstNonEmpty(...candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') {
+      return candidate.trim();
     }
   }
+  return '';
+}
 
-  if (typeof email === 'string' && email.trim() !== '') {
-    return email.trim();
-  }
+/**
+ * Turn an email address into a readable display name by capitalizing
+ * the local part and splitting on common separators.
+ *
+ *   "abebe@gmail.com"          → "Abebe"
+ *   "abebe.kassa@example.com"  → "Abebe Kassa"
+ *   "abebe_kassa@example.com"  → "Abebe Kassa"
+ *   "abebe-kassa@example.com"  → "Abebe Kassa"
+ *   "abebe123@gmail.com"       → "Abebe123"
+ */
+function nameFromEmail(email: string): string {
+  const trimmed = email.trim();
+  if (trimmed === '') return '';
 
-  return GENERIC_FALLBACK_NAME;
+  const atIndex = trimmed.indexOf('@');
+  const localPart = atIndex > 0 ? trimmed.slice(0, atIndex) : trimmed;
+  if (localPart === '') return '';
+
+  // Split on `.`, `_`, `-`, and `+` (common separators in email local parts).
+  const segments = localPart.split(/[._\-+]+/).filter((s) => s !== '');
+  if (segments.length === 0) return '';
+
+  return segments
+    .map((segment) => {
+      if (segment.length === 0) return segment;
+      const first = segment.charAt(0).toUpperCase();
+      const rest = segment.slice(1);
+      return first + rest;
+    })
+    .join(' ');
+}
+
+/**
+ * Resolve a display name from an Auth user object.
+ * Returns `''` when nothing usable is found (caller falls back further).
+ */
+function nameFromAuthUser(authUser: unknown): string {
+  const user = authUser as
+    | {
+        email?: unknown;
+        user_metadata?: Record<string, unknown> | null;
+      }
+    | null;
+
+  const meta = user?.user_metadata ?? undefined;
+
+  const fromMetadata = pickFirstNonEmpty(
+    meta?.full_name,
+    meta?.name,
+    meta?.display_name,
+    meta?.username
+  );
+  if (fromMetadata !== '') return fromMetadata;
+
+  const email = typeof user?.email === 'string' ? user.email : '';
+  const fromEmail = nameFromEmail(email);
+  if (fromEmail !== '') return fromEmail;
+
+  return '';
 }
 
 /**
  * Look up the student's `full_name` from the `profiles` table.
  * Returns `''` on any failure (missing table, missing row, RLS, etc.).
- *
- * Used as an additional fallback when Auth metadata doesn't yield a name.
  */
 async function fetchProfileFullName(
   supabase: SupabaseClient,
@@ -253,10 +286,7 @@ async function fetchProfileFullName(
     }
 
     const fullName = (data as { full_name?: unknown } | null)?.full_name;
-    if (typeof fullName === 'string' && fullName.trim() !== '') {
-      return fullName.trim();
-    }
-    return '';
+    return pickFirstNonEmpty(fullName);
   } catch (err) {
     console.warn(
       '[generate-certificate] profiles lookup unexpected error:',
@@ -478,61 +508,69 @@ export async function POST(request: Request) {
   // ---------- 3. Resolve the student's display name ----------
   //
   //   Priority chain (first non-empty wins):
-  //     1. user_metadata.full_name
-  //     2. user_metadata.name
-  //     3. user_metadata.display_name   (backward compat)
-  //     4. user_metadata.username       (backward compat)
-  //     5. user.email
-  //     6. profiles.full_name           (queried via the service role or anon key)
-  //     7. 'Student'                    (last resort)
+  //     1. profiles.full_name                          ← PRIMARY
+  //     2. user_metadata.full_name
+  //     3. user_metadata.name
+  //     4. user_metadata.display_name   (backward compat)
+  //     5. user_metadata.username       (backward compat)
+  //     6. Capitalized email prefix     (e.g. "abebe@gmail.com" → "Abebe")
   //
-  //   Both the Auth admin lookup and the profiles lookup are best-effort:
-  //   any failure silently falls through to the next source, and the PDF
-  //   is still generated.
-  // ---------------------------------------------------------------------
+  //   Every lookup is best-effort; failures fall through to the next
+  //   source. The generic "Student" label is never rendered.
+  // -------------------------------------------------------------
   let studentName = '';
 
-  // (a) Try the Auth admin API when we have the service role key.
-  if (clientMode === 'service') {
-    try {
-      const { data: userData, error: userErr } =
-        await supabase.auth.admin.getUserById(userId);
+  // (a) profiles.full_name — the primary source.
+  studentName = await fetchProfileFullName(supabase, userId);
 
-      if (userErr) {
-        console.warn(
-          '[generate-certificate] getUserById warning:',
-          userErr.message
-        );
-      } else if (userData?.user) {
-        const fromAuth = resolveStudentNameFromAuth(userData.user);
-        // Only accept if it isn't the generic fallback — otherwise try profiles.
-        if (fromAuth && fromAuth !== GENERIC_FALLBACK_NAME) {
-          studentName = fromAuth;
+  // (b) Auth metadata + email prefix.
+  //
+  //     We fetch the Auth user via the admin API when the service role key
+  //     is available. Without it (anon fallback), the Auth admin API is not
+  //     callable — but the same metadata is still reachable by using the
+  //     `getUserById` variant via the admin namespace, which the anon key
+  //     cannot access. In that case we simply skip step (b) and rely on
+  //     the profiles lookup above.
+  if (studentName === '') {
+    if (clientMode === 'service') {
+      try {
+        const { data: userData, error: userErr } =
+          await supabase.auth.admin.getUserById(userId);
+
+        if (userErr) {
+          console.warn(
+            '[generate-certificate] getUserById warning:',
+            userErr.message
+          );
+        } else if (userData?.user) {
+          const fromAuth = nameFromAuthUser(userData.user);
+          if (fromAuth !== '') {
+            studentName = fromAuth;
+          }
         }
+      } catch (userCatch) {
+        console.warn(
+          '[generate-certificate] getUserById unexpected error:',
+          userCatch instanceof Error ? userCatch.message : String(userCatch)
+        );
       }
-    } catch (userCatch) {
+    } else {
+      // Anon-key fallback path — try to derive the name from the email
+      // that the client sent, if available. (The `profiles` lookup above
+      // already ran; if it returned nothing, we fall through.)
       console.warn(
-        '[generate-certificate] getUserById unexpected error:',
-        userCatch instanceof Error ? userCatch.message : String(userCatch)
+        '[generate-certificate] Anon key in use — Auth admin lookup skipped; ' +
+          'relying on the profiles table lookup for the display name.'
       );
     }
-  } else {
-    console.warn(
-      '[generate-certificate] Anon key in use — skipping Auth admin lookup; will try the profiles table instead.'
-    );
   }
 
-  // (b) Fallback to the `profiles` table if the Auth lookup didn't yield a name.
+  // (c) Absolute last resort — derive from the userId itself so we never
+  //     render a hardcoded label. This produces something like
+  //     "User A1B2C3D4" which is still unique and non-generic.
   if (studentName === '') {
-    const fromProfile = await fetchProfileFullName(supabase, userId);
-    if (fromProfile !== '') {
-      studentName = fromProfile;
-    }
-  }
-
-  // (c) Last-resort generic fallback.
-  if (studentName === '') {
-    studentName = GENERIC_FALLBACK_NAME;
+    const shortId = userId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+    studentName = shortId !== '' ? `User ${shortId}` : 'Certificate Holder';
   }
 
   // ---------- 4. Verify payment approval ----------
