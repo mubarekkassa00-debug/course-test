@@ -162,6 +162,12 @@ export default function RegisterPage() {
   // Google OAuth sign-up — redirects to the Supabase Auth callback route so
   // the OAuth code exchange happens server-side (via /auth/callback), which
   // then forwards the authenticated user to the dashboard.
+  //
+  // The `redirectTo` value is built from `window.location.origin` so it works
+  // in every environment automatically:
+  //   • Production  → https://course-test-two.vercel.app/auth/callback
+  //   • Preview     → https://<preview>.vercel.app/auth/callback
+  //   • Local dev   → http://localhost:3000/auth/callback
   // ---------------------------------------------------------------------------
   const handleGoogleSignUp = async () => {
     setGoogleLoading(true);
