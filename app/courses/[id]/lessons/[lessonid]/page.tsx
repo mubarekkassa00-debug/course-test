@@ -5,13 +5,17 @@
 //   app/courses/[id]/lessons/[lessonId]/page.tsx
 //   └─> URL: /courses/<id>/lessons/<lessonId>
 //
+// SUPPORTS BOTH:
+//   • Regular lessons   → /courses/<id>/lessons/1, .../2, .../25
+//       Fetches only that lesson's questions (unchanged behavior).
+//   • Final exam        → /courses/<id>/lessons/final
+//       Fetches ALL questions for the course, shuffles via Fisher-Yates,
+//       then slices down to at most MAX_FINAL_EXAM_QUESTIONS (30).
+//
 // NOTE ON NEXT.JS 15+ ASYNC PARAMS:
 //   `await params` only works in SERVER components. This file is a
 //   CLIENT component ('use client'), so we must use the `useParams()`
 //   hook, which returns the params object synchronously.
-//
-//   ✔ Client component  → useParams()          (used below)
-//   ✔ Server component  → const { id } = await params
 
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
@@ -57,6 +61,63 @@ interface SavedScore {
   score: number;
   total: number;
   percentage: number;
+}
+
+// ---------------------------------------------------------------------------
+// FINAL EXAM CONSTANTS & HELPERS
+// ---------------------------------------------------------------------------
+
+/** Sentinel `lesson_id` used to store the final-exam result in `quiz_results`. */
+const FINAL_EXAM_LESSON_ID = 999;
+
+/** Hard cap on final-exam question count (slice after shuffle). */
+const MAX_FINAL_EXAM_QUESTIONS = 30;
+
+/**
+ * Synthetic lesson object used so the rest of the UI can render the
+ * final exam route through the exact same code path as regular lessons.
+ * No images, no audio — the quiz gate opens immediately.
+ */
+const FINAL_EXAM_LESSON: Lesson = {
+  id: 'final',
+  lessonNumber: FINAL_EXAM_LESSON_ID,
+  title: 'የመጨረሻ ፈተና (ሰርተፊኬት)',
+  images: [],
+  audioUrl: '',
+};
+
+/**
+ * Detect whether a lesson slug refers to the final exam.
+ * Accepts common variants (case-insensitive):
+ *   final, final-exam, final_exam, finalexam,
+ *   certificate, certificate-exam, certificate_exam
+ */
+function isFinalExamSlug(slug: string): boolean {
+  const s = (slug || '').toLowerCase().trim();
+  return (
+    s === 'final' ||
+    s === 'final-exam' ||
+    s === 'final_exam' ||
+    s === 'finalexam' ||
+    s === 'certificate' ||
+    s === 'certificate-exam' ||
+    s === 'certificate_exam'
+  );
+}
+
+/**
+ * Fisher–Yates (Knuth) shuffle — produces a new array; does not mutate input.
+ * Uses the modern descending-index variant with a uniform random swap.
+ */
+function fisherYatesShuffle<T>(input: T[]): T[] {
+  const arr = input.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
 }
 
 // ---------------------------------------------------------------------------
@@ -743,13 +804,6 @@ function resolveCourseId(courseId?: string): number | null {
 
 // ---------------------------------------------------------------------------
 // CANONICAL COURSE SLUG (for `quiz_results.course_id` column)
-//
-// Maps every accepted URL variant to the canonical slug stored in the
-// `quiz_results` table:
-//   → 'usul_al_thalatha'
-//   → 'arbain'
-//   → 'shurut_as_salah'
-//   → 'urjuzat'
 // ---------------------------------------------------------------------------
 function getCanonicalCourseSlug(courseId: string): string | null {
   const normalized = (courseId || '').toLowerCase().trim();
@@ -781,11 +835,6 @@ function getCanonicalCourseSlug(courseId: string): string | null {
 
 // ---------------------------------------------------------------------------
 // Dynamic quiz table resolver (question source tables — DO NOT ALTER)
-//
-//   Course 1 (Usul Al-Thalatha)   -> usul_al_thalatha_quiz
-//   Course 2 (Arbain An-Nawawi)   -> arbain_quiz
-//   Course 3 (Shurut As-Salah)    -> shurut_as_salah_quiz
-//   Course 4 (Urjuzetul Mi'iyah)  -> questions
 // ---------------------------------------------------------------------------
 function getQuizTableName(courseId: number): string | null {
   switch (courseId) {
@@ -804,9 +853,6 @@ function getQuizTableName(courseId: number): string | null {
 
 // ---------------------------------------------------------------------------
 // Column-name resolver.
-//
-//   The `questions` table stores the lesson identifier in `lesson_id`.
-//   All other quiz tables store it in `lesson_number`.
 // ---------------------------------------------------------------------------
 function getLessonColumnName(tableName: string): 'lesson_id' | 'lesson_number' {
   if (tableName === 'questions') {
@@ -843,27 +889,10 @@ function parseLessonNumber(
 }
 
 // ---------------------------------------------------------------------------
-// UNIVERSAL OPTION PARSING
-//
-// Supports BOTH:
-//
-//   1) `correct_option_index` (integer 0 | 1 | 2 | 3) → PRIMARY
-//      Maps directly to options[0] | options[1] | options[2] | options[3].
-//
-//   2) `correct_option` (legacy) → FALLBACK #1
-//      May contain: Amharic label, Latin letter, numeric string, or text.
-//
-//   3) `correct_answer` (legacy full-text) → FALLBACK #2
-//      Used by tables like `arbain_quiz` where the correct answer is stored
-//      as the exact option text. Matching is trim- and case-insensitive.
-//
-// Options may live in either of two shapes:
-//   A) Discrete columns  → option_a / option_b / option_c / option_d
-//   B) JSON array column → `options` (native array or JSON string)
+// UNIVERSAL OPTION PARSING (unchanged)
 // ---------------------------------------------------------------------------
 const AMHARIC_LABELS = ['ሀ', 'ለ', 'ሐ', 'መ'];
 
-/** Latin letter → 0-based option index (case-insensitive). */
 const LATIN_TO_INDEX: Record<string, number> = {
   a: 0,
   b: 1,
@@ -871,7 +900,6 @@ const LATIN_TO_INDEX: Record<string, number> = {
   d: 3,
 };
 
-/** Return the first candidate that is non-null, non-undefined, non-empty. */
 function pickFirstNonEmpty(...values: unknown[]): string {
   for (const value of values) {
     if (value === null || value === undefined) continue;
@@ -881,15 +909,10 @@ function pickFirstNonEmpty(...values: unknown[]): string {
   return '';
 }
 
-/** Normalize a string for safe comparison (trim + lowercase). */
 function normalizeForCompare(value: unknown): string {
   return String(value ?? '').trim().toLowerCase();
 }
 
-/**
- * Return true when two answer strings match after trimming and lowercasing.
- * Empty strings never match, which prevents spurious "correct" scores.
- */
 function areAnswersEqual(a: unknown, b: unknown): boolean {
   const left = normalizeForCompare(a);
   const right = normalizeForCompare(b);
@@ -897,12 +920,6 @@ function areAnswersEqual(a: unknown, b: unknown): boolean {
   return left === right;
 }
 
-/**
- * Safely parse an `options` column value. Accepts:
- *   • a native array               → used directly
- *   • a JSON-encoded array string  → JSON.parse'd
- *   • null / undefined / malformed → returns []
- */
 function parseOptions(options: any): string[] {
   if (Array.isArray(options)) {
     return options
@@ -926,11 +943,6 @@ function parseOptions(options: any): string[] {
   return [];
 }
 
-/**
- * Build normalized options from discrete option_a..option_d columns.
- * Empty / null entries are skipped, but the label index is preserved
- * against the original column position (so 'option_c' always → 'ሐ').
- */
 function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
   const rawValues = [
     item.option_a,
@@ -954,10 +966,6 @@ function buildOptionsFromDiscreteColumns(item: any): NormalizedOption[] {
   return result;
 }
 
-/**
- * Build normalized options from an `options` array/JSON column.
- * Empty / null entries are filtered out.
- */
 function buildOptionsFromArrayColumn(item: any): NormalizedOption[] {
   const arr = parseOptions(item?.options);
   const result: NormalizedOption[] = [];
@@ -975,10 +983,6 @@ function buildOptionsFromArrayColumn(item: any): NormalizedOption[] {
   return result;
 }
 
-/**
- * Resolve a 0-based option index to its text.
- * Returns `''` when the index is out of range or the option is empty.
- */
 function resolveCorrectAnswerFromIndex(
   index: number,
   options: NormalizedOption[]
@@ -989,33 +993,20 @@ function resolveCorrectAnswerFromIndex(
   return options[index]?.text ?? '';
 }
 
-/**
- * Resolve a raw correct-answer value to the matching option text.
- *
- * Supports (in order of precedence):
- *   1. Amharic label match ('ሀ' | 'ለ' | 'ሐ' | 'መ')
- *   2. Latin letter (A/a → 0, B/b → 1, C/c → 2, D/d → 3)
- *   3. Numeric string ('0' | '1' | '2' | '3')
- *   4. Direct text match (trim + case-insensitive)
- *   5. Raw fallback (returns the value untouched)
- */
 function resolveCorrectAnswerText(
   rawCorrect: string,
   options: NormalizedOption[]
 ): string {
   if (rawCorrect === '') return '';
 
-  // 1. Amharic label match.
   const byLabel = options.find((opt) => opt.label === rawCorrect);
   if (byLabel) return byLabel.text;
 
-  // 2. Latin letter → index.
   const latinIndex = LATIN_TO_INDEX[rawCorrect.toLowerCase()];
   if (latinIndex !== undefined && options[latinIndex]) {
     return options[latinIndex].text;
   }
 
-  // 3. Numeric string → index.
   if (/^\d+$/.test(rawCorrect)) {
     const numericIndex = parseInt(rawCorrect, 10);
     if (numericIndex >= 0 && numericIndex < options.length) {
@@ -1023,30 +1014,16 @@ function resolveCorrectAnswerText(
     }
   }
 
-  // 4. Direct text match (trim + case-insensitive).
   const needle = normalizeForCompare(rawCorrect);
   const byText = options.find(
     (opt) => normalizeForCompare(opt.text) === needle
   );
   if (byText) return byText.text;
 
-  // 5. Fallback: return the raw value as-is.
   return rawCorrect;
 }
 
-/**
- * Normalize one raw row coming from Supabase into a uniform shape.
- *
- * Correct-answer resolution priority:
- *   1. `correct_option_index`  → integer 0..3, maps directly by array position
- *   2. `correct_option`        → legacy, resolved via labels / letters / text
- *   3. `correct_answer`        → legacy full-text (e.g. `arbain_quiz`),
- *                                resolved via the same label / letter / text
- *                                chain. If it already *is* the option text,
- *                                it will match directly in step 4 above.
- */
 function normalizeQuestion(item: any): NormalizedQuestion {
-  // (1) Options — discrete columns take priority, else JSON `options`.
   const hasDiscreteColumns =
     item.option_a !== undefined ||
     item.option_b !== undefined ||
@@ -1057,7 +1034,6 @@ function normalizeQuestion(item: any): NormalizedQuestion {
     ? buildOptionsFromDiscreteColumns(item)
     : buildOptionsFromArrayColumn(item);
 
-  // (2) Correct answer resolution — priority: index → correct_option → correct_answer.
   let correctAnswerText = '';
 
   const hasValidIndex =
@@ -1067,12 +1043,10 @@ function normalizeQuestion(item: any): NormalizedQuestion {
     !isNaN(Number(item.correct_option_index));
 
   if (hasValidIndex) {
-    // Primary: `correct_option_index` (integer 0..3).
     const indexNum = Math.trunc(Number(item.correct_option_index));
     correctAnswerText = resolveCorrectAnswerFromIndex(indexNum, options);
   }
 
-  // Fallback #1 / #2: `correct_option` then `correct_answer`.
   if (correctAnswerText === '') {
     const rawCorrect = pickFirstNonEmpty(
       item.correct_option,
@@ -1138,7 +1112,20 @@ export default function LessonPage() {
     return l.id.toLowerCase() === currentLessonId;
   });
 
-  const lesson = currentIndex !== -1 ? courseLessons[currentIndex] : null;
+  const foundLesson = currentIndex !== -1 ? courseLessons[currentIndex] : null;
+
+  // ------------------------------------------------------------------
+  // FINAL EXAM DETECTION
+  //
+  // If the slug isn't a regular lesson, check whether it's one of the
+  // accepted final-exam aliases. If so, use a synthetic lesson object
+  // (stable module-level reference) so the rest of the UI renders
+  // through the exact same code path.
+  // ------------------------------------------------------------------
+  const isFinalExam = !foundLesson && isFinalExamSlug(currentLessonId);
+
+  const lesson: Lesson | null =
+    foundLesson ?? (isFinalExam ? FINAL_EXAM_LESSON : null);
 
   const [hasMounted, setHasMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<'lesson' | 'quiz'>('lesson');
@@ -1161,11 +1148,7 @@ export default function LessonPage() {
   const [submittingQuiz, setSubmittingQuiz] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
-  // ------------------------------------------------------------------
-  // Score fetched from `quiz_results` (Supabase) for the current
-  // (user_id, course_id, lesson_id) triple. Displayed in the header
-  // and on the quiz result screen.
-  // ------------------------------------------------------------------
+  // Score fetched from `quiz_results` (Supabase)
   const [savedScore, setSavedScore] = useState<SavedScore | null>(null);
   const [loadingSavedScore, setLoadingSavedScore] = useState(false);
 
@@ -1174,7 +1157,7 @@ export default function LessonPage() {
     setHasMounted(true);
   }, []);
 
-  // Reset UI on lesson change.
+  // Reset UI on lesson change (including final exam).
   useEffect(() => {
     setCurrentImg(0);
     setIsAudioFinished(false);
@@ -1188,6 +1171,9 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // Fetch previously saved score from `quiz_results` on lesson change.
+  //
+  // For the final exam we use the sentinel `lesson_id = 999` so its
+  // row stays distinct from any regular lesson (1..25).
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!lesson) {
@@ -1215,10 +1201,10 @@ export default function LessonPage() {
           return;
         }
 
-        const lessonNum = parseLessonNumber(
-          lesson.lessonNumber,
-          currentLessonId
-        );
+        // For the final exam, store/read a distinct sentinel lesson_id.
+        const lessonNum = isFinalExam
+          ? FINAL_EXAM_LESSON_ID
+          : parseLessonNumber(lesson.lessonNumber, currentLessonId);
 
         const { data, error } = await supabase
           .from('quiz_results')
@@ -1259,10 +1245,17 @@ export default function LessonPage() {
     return () => {
       cancelled = true;
     };
-  }, [lesson, courseId, currentLessonId]);
+  }, [lesson, courseId, currentLessonId, isFinalExam]);
 
   // ------------------------------------------------------------------
   // Fetch quiz questions from the correct dynamic table.
+  //
+  // • Regular lesson → filter by that specific `lesson_number` /
+  //   `lesson_id` (unchanged behavior).
+  //
+  // • Final exam     → fetch ALL questions for the course table,
+  //   Fisher–Yates shuffle, then slice to at most
+  //   MAX_FINAL_EXAM_QUESTIONS (30).
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!lesson) return;
@@ -1295,6 +1288,55 @@ export default function LessonPage() {
           return;
         }
 
+        // -------------------------------------------------------------
+        // FINAL EXAM — fetch ALL rows from the course table,
+        // Fisher–Yates shuffle, then slice to MAX_FINAL_EXAM_QUESTIONS.
+        // No `.eq(lesson_number / lesson_id, ...)` filter is applied.
+        // -------------------------------------------------------------
+        if (isFinalExam) {
+          console.log(
+            `Fetching FINAL EXAM | table=${tableName} | (all rows, shuffle, slice ${MAX_FINAL_EXAM_QUESTIONS})`
+          );
+
+          const { data: allRows, error: allErr } = await supabase
+            .from(tableName)
+            .select('*')
+            .order('id', { ascending: true });
+
+          if (allErr) {
+            console.error(
+              `Fetch final-exam questions error from ${tableName}:`,
+              JSON.stringify(allErr, null, 2)
+            );
+            setQuizError('ጥያቄዎችን ማምጣት አልተቻለም።');
+            setQuiz(null);
+            setQuestions([]);
+            return;
+          }
+
+          if (!allRows || allRows.length === 0) {
+            setQuizError('ለዚህ ኮርስ እስካሁን ምንም ጥያቄ አልተዘጋጀም');
+            setQuiz(null);
+            setQuestions([]);
+            return;
+          }
+
+          // Shuffle the full set, then take at most 30.
+          const shuffled = fisherYatesShuffle(allRows as any[]);
+          const selected = shuffled.slice(0, MAX_FINAL_EXAM_QUESTIONS);
+
+          const parsedFinal: NormalizedQuestion[] =
+            selected.map(normalizeQuestion);
+
+          setQuiz(null);
+          setQuestions(parsedFinal);
+          setQuizError(null);
+          return;
+        }
+
+        // -------------------------------------------------------------
+        // REGULAR LESSON — filter by lesson_number / lesson_id (unchanged).
+        // -------------------------------------------------------------
         const lessonColumn = getLessonColumnName(tableName);
 
         const targetLessonNumber = parseLessonNumber(
@@ -1350,9 +1392,9 @@ export default function LessonPage() {
     return () => {
       cancelled = true;
     };
-  }, [lesson, courseId, currentLessonId, retryKey]);
+  }, [lesson, courseId, currentLessonId, retryKey, isFinalExam]);
 
-  // Audio ended handler.
+  // Audio ended handler (unchanged).
   const handleAudioEnded = () => {
     if (isAudioFinished) return; // idempotent
     console.log('Audio completed → unlocking + auto-starting quiz...');
@@ -1385,13 +1427,11 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // Submit → save score to `quiz_results` via upsert.
+  //
   // onConflict target: (user_id, course_id, lesson_id)
   //
-  // Scoring compares the user's selected option *text* against the
-  // normalized `correctAnswerText` using `areAnswersEqual`, which trims
-  // and lowercases both sides — this prevents false 0 scores caused by
-  // stray whitespace or case differences between `correct_answer` and
-  // the option text stored in `arbain_quiz`.
+  // For the final exam, `lesson_id = FINAL_EXAM_LESSON_ID` (999) so it
+  // stays distinct from any regular lesson row.
   // ------------------------------------------------------------------
   const handleSubmitQuiz = async () => {
     if (!questions.length || !lesson || submittingQuiz) return;
@@ -1433,10 +1473,10 @@ export default function LessonPage() {
         return;
       }
 
-      const lessonNum = parseLessonNumber(
-        lesson.lessonNumber,
-        currentLessonId
-      );
+      // Final exam uses the sentinel lesson_id.
+      const lessonNum = isFinalExam
+        ? FINAL_EXAM_LESSON_ID
+        : parseLessonNumber(lesson.lessonNumber, currentLessonId);
 
       const { error } = await supabase.from('quiz_results').upsert(
         {
@@ -1459,12 +1499,22 @@ export default function LessonPage() {
     }
   };
 
+  // ------------------------------------------------------------------
+  // Quiz navigation
+  //
+  // `goToQuiz` also works for lessons without audio (including the
+  // final exam): if there is no audio, the audio gate is bypassed and
+  // the quiz tab unlocks immediately.
+  // ------------------------------------------------------------------
   const goToQuiz = () => {
-    // Strict gate: quiz tab can only be entered when the audio has finished.
-    if (isAudioFinished && isQuizUnlocked) {
-      setActiveTab('quiz');
-    }
+    if (!lesson) return;
+    // If the lesson has audio, keep the strict audio-finish gate.
+    if (lesson.audioUrl && !isAudioFinished) return;
+    setIsAudioFinished(true);
+    setIsQuizUnlocked(true);
+    setActiveTab('quiz');
   };
+
   const goToLesson = () => setActiveTab('lesson');
   const retryFetch = () => setRetryKey((prev) => prev + 1);
 
@@ -1645,7 +1695,11 @@ export default function LessonPage() {
             ) : (
               <div className="text-center py-12 text-slate-500">
                 <ImageIcon className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                <p>ምስሎች ገና አልተጫኑም</p>
+                <p>
+                  {isFinalExam
+                    ? 'የመጨረሻ ፈተና — ከዚህ በታች ያለውን ቁልፍ ተጭነው ይጀምሩ።'
+                    : 'ምስሎች ገና አልተጫኑም'}
+                </p>
               </div>
             )}
           </div>
@@ -1674,12 +1728,12 @@ export default function LessonPage() {
                   Your browser does not support the audio element.
                 </audio>
               </div>
-            ) : (
+            ) : !isFinalExam ? (
               <div className="text-center py-2 text-slate-500 mb-3">
                 <Volume2 className="h-6 w-6 mx-auto opacity-50" />
                 <p className="text-xs">ኦዲዮ አልተገኘም</p>
               </div>
-            )}
+            ) : null}
 
             {loadingQuiz && (
               <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
@@ -1711,7 +1765,7 @@ export default function LessonPage() {
               </div>
             )}
 
-            {/* Start Quiz button — gated by isAudioFinished */}
+            {/* Start Quiz button — gated by isAudioFinished (or absence of audio) */}
             {!loadingQuiz &&
               quizAvailable &&
               (isAudioFinished || !lesson.audioUrl) && (
@@ -1779,7 +1833,7 @@ export default function LessonPage() {
           ) : (
             <>
               <h3 className="text-lg font-bold text-white mb-1">
-                {quiz?.title || 'የደርሱ ፈተና'}
+                {quiz?.title || (isFinalExam ? 'የመጨረሻ ፈተና' : 'የደርሱ ፈተና')}
               </h3>
               <p className="text-xs text-slate-400 mb-4">
                 ጥያቄ {currentStep + 1} / {questions.length}

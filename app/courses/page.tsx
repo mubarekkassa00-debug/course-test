@@ -10,7 +10,17 @@ import {
   GraduationCap,
   Menu,
   X,
+  ArrowLeft,
 } from 'lucide-react';
+
+// ---------------------------------------------------------------------------
+// CONFIGURABLE VISUAL ASSET
+// ---------------------------------------------------------------------------
+// Swap this URL to change the header background image.
+// Accepts any HTTPS image URL (Cloudinary, Unsplash, CDN) or a local path
+// like '/images/header.jpg' served from /public.
+const HEADER_BG_URL =
+  'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?auto=format&fit=crop&w=1600&q=80';
 
 // ---------------------------------------------------------------------------
 // Amharic text constants
@@ -23,6 +33,7 @@ const amh = {
   dashboard: 'ዳሽቦርድ',
   courses: 'ኮርሶች',
   menu: 'ማውጫ',
+  backToDashboard: 'ወደ ዳሽቦርድ',
 };
 
 // ---------------------------------------------------------------------------
@@ -111,28 +122,59 @@ export default function CoursesPage() {
           : 'bg-slate-50 text-slate-900'
       }`}
     >
-      {/* Top Header with Hamburger Menu */}
-      <header className="bg-white dark:bg-slate-800 shadow-sm border-b border-slate-200 dark:border-slate-700 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMenuOpen(true)}
-              aria-label={amh.menu}
-              aria-expanded={menuOpen}
-              className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-            >
-              <Menu className="h-6 w-6 text-slate-700 dark:text-slate-200" />
-            </button>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2 truncate">
-              <GraduationCap className="h-6 w-6 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <span className="truncate">{amh.title}</span>
-            </h1>
-          </div>
+      {/* =================================================================== */}
+      {/* Top Header with background image                                    */}
+      {/* Left: Back → Dashboard · Center: Title · Right: Hamburger           */}
+      {/* =================================================================== */}
+      <header className="relative sticky top-0 z-40 overflow-hidden shadow-sm border-b border-slate-200/60 dark:border-slate-700/60">
+        {/* Background image + overlay layers */}
+        <div className="absolute inset-0">
+          <img
+            src={HEADER_BG_URL}
+            alt=""
+            aria-hidden="true"
+            className="h-full w-full object-cover scale-105"
+          />
+          {/* Emerald tint + darkness for legibility */}
+          <div className="absolute inset-0 bg-gradient-to-tr from-emerald-950/85 via-emerald-900/70 to-slate-950/80" />
+          {/* Subtle decorative glow */}
+          <div className="absolute -top-16 -right-16 h-32 w-32 rounded-full bg-amber-400/20 blur-3xl" />
+          <div className="absolute -bottom-16 -left-16 h-32 w-32 rounded-full bg-emerald-400/20 blur-3xl" />
+        </div>
+
+        {/* Header content */}
+        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-3">
+          {/* LEFT — Back to Dashboard */}
+          <Link
+            href="/dashboard"
+            aria-label={amh.backToDashboard}
+            className="flex-shrink-0 p-2 rounded-xl bg-white/10 backdrop-blur-sm hover:bg-white/20 transition-colors"
+          >
+            <ArrowLeft className="h-6 w-6 text-white" />
+          </Link>
+
+          {/* CENTER — Title */}
+          <h1 className="flex-1 min-w-0 text-lg sm:text-xl font-bold text-white flex items-center justify-center gap-2 truncate drop-shadow-sm">
+            <GraduationCap className="h-6 w-6 flex-shrink-0 text-amber-300" />
+            <span className="truncate">{amh.title}</span>
+          </h1>
+
+          {/* RIGHT — Hamburger Menu */}
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            aria-label={amh.menu}
+            aria-expanded={menuOpen}
+            className="flex-shrink-0 p-2 rounded-xl bg-white/10 backdrop-blur-sm hover:bg-white/20 transition-colors"
+          >
+            <Menu className="h-6 w-6 text-white" />
+          </button>
         </div>
       </header>
 
-      {/* Hamburger Drawer + Backdrop */}
+      {/* =================================================================== */}
+      {/* Hamburger Drawer + Backdrop                                          */}
+      {/* =================================================================== */}
       {menuOpen && (
         <div
           className="fixed inset-0 z-50"
@@ -148,7 +190,7 @@ export default function CoursesPage() {
 
           {/* Drawer panel */}
           <aside
-            className="absolute top-0 left-0 h-full w-72 max-w-[85vw] bg-white dark:bg-slate-800 shadow-2xl border-r border-slate-200 dark:border-slate-700 flex flex-col"
+            className="absolute top-0 right-0 h-full w-72 max-w-[85vw] bg-white dark:bg-slate-800 shadow-2xl border-l border-slate-200 dark:border-slate-700 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 py-4 border-b border-slate-200 dark:border-slate-700">
@@ -157,7 +199,7 @@ export default function CoursesPage() {
                   <GraduationCap className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
                 </div>
                 <span className="text-base font-bold text-slate-900 dark:text-white">
-                  በሲራ
+                  ባሲራ
                 </span>
               </div>
               <button
@@ -192,14 +234,15 @@ export default function CoursesPage() {
         </div>
       )}
 
-      {/* Main content */}
+      {/* =================================================================== */}
+      {/* Main content — course grid starts directly below the header         */}
+      {/* =================================================================== */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-12">
-        {/* Course Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {courses.map((course) => (
             <div
               key={course.id}
-              className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden hover:shadow-lg transition-all duration-300 flex flex-col"
+              className="group bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col transition-all duration-300 ease-out hover:scale-[1.02] hover:shadow-xl hover:shadow-emerald-950/10 hover:border-emerald-200 dark:hover:border-emerald-900/60"
             >
               {/* Islamic cover image with subtle gradient overlay */}
               <div
@@ -209,7 +252,7 @@ export default function CoursesPage() {
                   src={course.image}
                   alt={course.title}
                   loading="lazy"
-                  className="absolute inset-0 h-full w-full object-cover opacity-90"
+                  className="absolute inset-0 h-full w-full object-cover opacity-90 transition-transform duration-500 ease-out group-hover:scale-110"
                 />
                 {/* Subtle dark gradient for readability + premium feel */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-black/10" />
@@ -230,7 +273,7 @@ export default function CoursesPage() {
 
               {/* Details */}
               <div className="p-5 flex-1 flex flex-col">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                   {course.title}
                 </h3>
 

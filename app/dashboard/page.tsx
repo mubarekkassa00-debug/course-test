@@ -29,6 +29,15 @@ import {
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
+// CONFIGURABLE VISUAL ASSET
+// ---------------------------------------------------------------------------
+// Swap this URL to change the dashboard hero background image.
+// Accepts any HTTPS image URL (Cloudinary, Unsplash, CDN) or a local path
+// like '/images/hero.jpg' served from /public.
+const HERO_IMAGE_URL =
+  'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?auto=format&fit=crop&w=1600&q=80';
+
+// ---------------------------------------------------------------------------
 // Types & Helpers
 // ---------------------------------------------------------------------------
 
@@ -215,7 +224,7 @@ export default function DashboardPage() {
   const [certError, setCertError] = useState<string | null>(null);
   const [certSuccess, setCertSuccess] = useState<string | null>(null);
 
-  // ---------- Dark mode state & persistence ----------
+  // ---------- Dark mode state & persistence (globally synced) ----------
   useEffect(() => {
     const stored = localStorage.getItem('basira-theme');
     let isDark = false;
@@ -416,9 +425,6 @@ export default function DashboardPage() {
     setCertSuccess(null);
 
     try {
-      // -------------------------------------------------------------
-      // 1. POST to the API with the logged-in user's ID in the body.
-      // -------------------------------------------------------------
       const response = await fetch('/api/generate-certificate', {
         method: 'POST',
         credentials: 'include',
@@ -426,10 +432,6 @@ export default function DashboardPage() {
         body: JSON.stringify({ userId: user.id }),
       });
 
-      // -------------------------------------------------------------
-      // 2. Handle auth / server errors. The API always returns JSON,
-      //    even on non-2xx responses.
-      // -------------------------------------------------------------
       let payload: any = null;
       try {
         payload = await response.json();
@@ -467,10 +469,6 @@ export default function DashboardPage() {
         return;
       }
 
-      // -------------------------------------------------------------
-      // 3. Force a direct PDF download (avoids opening in a preview
-      //    tab and works uniformly across browsers).
-      // -------------------------------------------------------------
       const filename = buildCertificateFilename(
         user.full_name || user.email || 'Student'
       );
@@ -539,6 +537,8 @@ export default function DashboardPage() {
     );
   }
 
+  const displayName = user?.full_name || user?.email || 'ተማሪ';
+
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
@@ -550,27 +550,29 @@ export default function DashboardPage() {
           : 'bg-slate-50 text-slate-900'
       }`}
     >
-      {/* Sticky Header */}
-      <header className="sticky top-0 z-50 bg-white dark:bg-slate-800 shadow-sm border-b border-slate-200 dark:border-slate-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+      {/* ================================================================= */}
+      {/* Sticky Header (glassmorphism)                                     */}
+      {/* ================================================================= */}
+      <header className="sticky top-0 z-50 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-slate-200/60 dark:border-slate-800/60 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900">
-              <GraduationCap className="h-6 w-6 text-emerald-600 dark:text-emerald-300" />
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
+              <GraduationCap className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900 dark:text-white">
-                በሲራ
+              <h1 className="text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 to-emerald-800 dark:from-emerald-300 dark:to-emerald-500 bg-clip-text text-transparent">
+                ባሲራ
               </h1>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 -mt-0.5">
                 Basira Dashboard
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={toggleDarkMode}
-              className="relative z-50 p-3 touch-manipulation cursor-pointer rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              className="relative p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               aria-label="Toggle dark mode"
             >
               {darkMode ? (
@@ -580,17 +582,17 @@ export default function DashboardPage() {
               )}
             </button>
 
-            <div className="hidden sm:flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <div className="hidden sm:flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 pl-1 pr-3 py-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60">
               <User className="h-4 w-4 text-slate-400 dark:text-slate-500" />
-              <span className="font-medium">
-                {user?.full_name || user?.email || 'ተማሪ'}
+              <span className="font-medium max-w-[140px] truncate">
+                {displayName}
               </span>
             </div>
 
             <button
               onClick={handleLogout}
               disabled={loggingOut}
-              className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-600 px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-200 dark:hover:border-red-800 transition-colors duration-200 disabled:opacity-60"
+              className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 px-3 sm:px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-200 dark:hover:border-red-800 transition-colors duration-200 disabled:opacity-60"
             >
               {loggingOut ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -603,60 +605,48 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 pb-12">
+      {/* ================================================================= */}
+      {/* Main Content                                                       */}
+      {/* ================================================================= */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-5 sm:mt-6 pb-12">
         {/* ============================================================ */}
-        {/* WELCOME BANNER (Hijri date on top, greeting below)           */}
+        {/* PRIMARY CARD 1 — COMPACT HERO / WELCOME BANNER               */}
         {/* ============================================================ */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-emerald-100 dark:border-slate-700 p-6 sm:p-8 flex flex-col gap-4">
-          <div className="self-start inline-flex items-center gap-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl px-4 py-2">
-            <Calendar className="h-5 w-5 text-emerald-600 dark:text-emerald-300" />
-            <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-              ዛሬ፡ {hijriDate}
-            </span>
+        <div className="relative rounded-2xl overflow-hidden shadow-lg shadow-emerald-950/10 ring-1 ring-emerald-100/60 dark:ring-emerald-900/40">
+          {/* Background image + layered overlays */}
+          <div className="absolute inset-0">
+            <img
+              src={HERO_IMAGE_URL}
+              alt=""
+              aria-hidden="true"
+              className="h-full w-full object-cover scale-105"
+            />
+            {/* Emerald tint + darkness gradient for legibility */}
+            <div className="absolute inset-0 bg-gradient-to-tr from-emerald-950/85 via-emerald-900/70 to-slate-950/80" />
+            {/* Subtle decorative glow orbs */}
+            <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-amber-400/20 blur-3xl" />
+            <div className="absolute -bottom-20 -left-20 h-40 w-40 rounded-full bg-emerald-400/20 blur-3xl" />
           </div>
 
-          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
-            እንኳን ደህና መጡ፣ {user?.full_name || 'ተማሪ'}!{' '}
-            <Sparkles className="inline h-6 w-6 text-amber-400" />
-          </h2>
+          {/* Compact content */}
+          <div className="relative px-5 sm:px-7 py-6 sm:py-7 flex flex-col gap-3">
+            {/* Date badge (glassmorphism) — compact */}
+            <div className="self-start inline-flex items-center gap-2 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5">
+              <Calendar className="h-4 w-4 text-amber-300" />
+              <span className="text-xs font-medium text-white/95 tracking-wide">
+                ዛሬ፡ {hijriDate}
+              </span>
+            </div>
+
+            {/* Greeting — compact */}
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight drop-shadow-sm">
+                እንኳን ደህና መጡ፣ {displayName}!
+              </h2>
+              <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-amber-300" />
+            </div>
+          </div>
         </div>
-
-        {/* ============================================================ */}
-        {/* TELEGRAM CHANNEL CARD                                        */}
-        {/* ============================================================ */}
-        {/*
-          TODO: Replace the `href="#"` below with your real Telegram channel link.
-          Example:
-            href="https://t.me/YourChannelName"
-            href="YOUR_TELEGRAM_LINK_HERE"
-        */}
-        <a
-          href="#"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-6 group block rounded-2xl border border-sky-200 dark:border-sky-900/60 bg-gradient-to-br from-sky-50 via-white to-sky-50 dark:from-sky-950/40 dark:via-slate-800 dark:to-sky-950/40 p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
-        >
-          <div className="flex items-center gap-4">
-            <div
-              className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl shadow-sm"
-              style={{ backgroundColor: '#0088cc' }}
-            >
-              <Send className="h-6 w-6 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-base sm:text-lg font-bold text-sky-900 dark:text-sky-100">
-                የቴሌግራም ቻናላችንን ይቀላቀሉ
-              </h3>
-              <p className="mt-0.5 text-xs sm:text-sm text-sky-800/80 dark:text-sky-200/80">
-                አዳዲስ ትምህርቶችንና ማሳሰቢያዎችን በቴሌግራም ያግኙ።
-              </p>
-            </div>
-            <span className="hidden sm:inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1.5 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
-              Join
-            </span>
-          </div>
-        </a>
 
         {/* ============================================================ */}
         {/* PAYMENT GATE                                                 */}
@@ -693,11 +683,11 @@ export default function DashboardPage() {
         )}
 
         {/* ============================================================ */}
-        {/* COURSE PROGRESS                                              */}
+        {/* PRIMARY CARD 2 — COURSE PROGRESS                             */}
         {/* ============================================================ */}
         <div
           className={[
-            'mt-6 relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 overflow-hidden',
+            'mt-6 relative bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6 overflow-hidden',
             !isPaymentApproved ? 'opacity-70' : '',
           ].join(' ')}
         >
@@ -714,8 +704,8 @@ export default function DashboardPage() {
 
           <div className="flex items-center justify-between gap-4 mb-5">
             <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-900/30">
-                <Award className="h-6 w-6 text-emerald-600 dark:text-emerald-300" />
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-md shadow-emerald-900/20">
+                <Award className="h-6 w-6 text-white" />
               </div>
               <div>
                 <h3 className="text-lg font-bold text-slate-800 dark:text-white">
@@ -751,42 +741,61 @@ export default function DashboardPage() {
               {courseProgress.map((c) => {
                 const isPassed = c.status === 'passed';
                 const isInProgress = c.status === 'in_progress';
+
+                const barWidth = Math.max(0, Math.min(100, c.bestPercent));
+
+                const barColor = isPassed
+                  ? 'bg-emerald-500'
+                  : isInProgress
+                  ? 'bg-amber-500'
+                  : 'bg-slate-300 dark:bg-slate-600';
+
                 return (
                   <div
                     key={c.slug}
                     className={[
-                      'flex items-center gap-2 sm:gap-3 rounded-xl border px-3 py-3 sm:px-4 transition-colors',
+                      'flex flex-col rounded-xl border px-3 py-3 sm:px-4 transition-colors',
                       isPassed
                         ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30'
                         : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/40',
                     ].join(' ')}
                   >
-                    <div className="flex-shrink-0">
-                      {isPassed ? (
-                        <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
-                      ) : isInProgress ? (
-                        <Clock className="h-5 w-5 sm:h-6 sm:w-6 text-amber-500" />
-                      ) : (
-                        <Circle className="h-5 w-5 sm:h-6 sm:w-6 text-slate-300 dark:text-slate-600" />
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <div className="flex-shrink-0">
+                        {isPassed ? (
+                          <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
+                        ) : isInProgress ? (
+                          <Clock className="h-5 w-5 sm:h-6 sm:w-6 text-amber-500" />
+                        ) : (
+                          <Circle className="h-5 w-5 sm:h-6 sm:w-6 text-slate-300 dark:text-slate-600" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
+                          {c.displayName}
+                        </p>
+                        <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+                          {isPassed
+                            ? `ተሳክቷል · ${c.bestPercent}%`
+                            : isInProgress
+                            ? `በሂደት · ${c.bestPercent}% / ${PASS_THRESHOLD_PERCENT}%`
+                            : 'አልተጀመረም'}
+                        </p>
+                      </div>
+                      {isPassed && (
+                        <span className="hidden sm:inline-flex flex-shrink-0 rounded-full bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5">
+                          PASS
+                        </span>
                       )}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
-                        {c.displayName}
-                      </p>
-                      <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                        {isPassed
-                          ? `ተሳክቷል · ${c.bestPercent}%`
-                          : isInProgress
-                          ? `በሂደት · ${c.bestPercent}% / ${PASS_THRESHOLD_PERCENT}%`
-                          : 'አልተጀመረም'}
-                      </p>
+
+                    {/* Thin animated progress bar */}
+                    <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ease-out ${barColor}`}
+                        style={{ width: `${barWidth}%` }}
+                      />
                     </div>
-                    {isPassed && (
-                      <span className="hidden sm:inline-flex flex-shrink-0 rounded-full bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5">
-                        PASS
-                      </span>
-                    )}
                   </div>
                 );
               })}
@@ -795,12 +804,12 @@ export default function DashboardPage() {
         </div>
 
         {/* ============================================================ */}
-        {/* CERTIFICATE FLOW                                             */}
+        {/* PRIMARY CARD 3 — CERTIFICATE FLOW                            */}
         {/* ============================================================ */}
         {!paymentLoading && isPaymentApproved && (
           <>
             {!progressLoading && allCoursesPassed && (
-              <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-emerald-100 dark:border-emerald-900/50 p-6">
+              <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6">
                 <div className="flex items-start gap-4">
                   <div className="flex-shrink-0">
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-amber-100 dark:from-emerald-900/40 dark:to-amber-900/40">
@@ -889,11 +898,11 @@ export default function DashboardPage() {
             )}
 
             {!progressLoading && !allCoursesPassed && (
-              <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+              <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6">
                 <div className="flex items-start gap-4">
                   <div className="flex-shrink-0">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700/60">
-                      <Award className="h-6 w-6 text-slate-500 dark:text-slate-300" />
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-900/40">
+                      <Award className="h-6 w-6 text-emerald-600 dark:text-emerald-300" />
                     </div>
                   </div>
                   <div className="flex-1">
@@ -921,7 +930,7 @@ export default function DashboardPage() {
         )}
 
         {/* ============================================================ */}
-        {/* 4 LEARNING PILLARS (2-column grid)                          */}
+        {/* SECONDARY — 4 LEARNING PILLARS                               */}
         {/* ============================================================ */}
         <div className="mt-8">
           <div className="flex items-center gap-2 mb-6">
@@ -943,9 +952,9 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
-                  ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
+                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
               ].join(' ')}
             >
@@ -959,19 +968,13 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="absolute top-3 right-3 sm:top-4 sm:right-4">
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-[10px] sm:text-xs font-semibold text-amber-700 dark:text-amber-300">
-                  <Lock className="h-3 w-3" />
-                  የተከፈለ
-                </span>
+              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-amber-50 dark:bg-amber-900/20 mb-3">
+                <BookOpen className="h-5 w-5 sm:h-6 sm:w-6 text-amber-600 dark:text-amber-400" />
               </div>
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-amber-50 dark:bg-amber-900/20 mb-3 sm:mb-4">
-                <BookOpen className="h-6 w-6 sm:h-7 sm:w-7 text-amber-600 dark:text-amber-400" />
-              </div>
-              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 የላቁ ኮርሶች
               </h4>
-              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የተከፈሉና የላቁ ኮርሶች ከምሁራን ጋር።
               </p>
             </Link>
@@ -982,9 +985,9 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
-                  ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
+                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
               ].join(' ')}
             >
@@ -998,13 +1001,13 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 mb-3 sm:mb-4">
-                <Mic className="h-6 w-6 sm:h-7 sm:w-7 text-emerald-600 dark:text-emerald-400" />
+              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-emerald-50 dark:bg-emerald-900/20 mb-3">
+                <Mic className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 የቁርአን ማዕከል
               </h4>
-              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የቃሪዎች ማዕከል – ተጅዊድና ንባብ ልምምድ።
               </p>
             </Link>
@@ -1015,9 +1018,9 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
-                  ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
+                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
               ].join(' ')}
             >
@@ -1031,13 +1034,13 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-blue-50 dark:bg-blue-900/20 mb-3 sm:mb-4">
-                <GraduationCap className="h-6 w-6 sm:h-7 sm:w-7 text-blue-600 dark:text-blue-400" />
+              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-blue-50 dark:bg-blue-900/20 mb-3">
+                <GraduationCap className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600 dark:text-blue-400" />
               </div>
-              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 ዳዕዋዎችና ሙሐደራዎች
               </h4>
-              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የሀገር ውስጥና ዓለም አቀፍ እስላማዊ ትምህርቶች።
               </p>
             </Link>
@@ -1048,9 +1051,9 @@ export default function DashboardPage() {
               aria-disabled={!isPaymentApproved}
               tabIndex={isPaymentApproved ? 0 : -1}
               className={[
-                'group relative bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-4 sm:p-6 transition-all duration-300 touch-manipulation',
+                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
                 isPaymentApproved
-                  ? 'hover:shadow-lg hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
+                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
               ].join(' ')}
             >
@@ -1064,18 +1067,54 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-purple-50 dark:bg-purple-900/20 mb-3 sm:mb-4">
-                <Library className="h-6 w-6 sm:h-7 sm:w-7 text-purple-600 dark:text-purple-400" />
+              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-purple-50 dark:bg-purple-900/20 mb-3">
+                <Library className="h-5 w-5 sm:h-6 sm:w-6 text-purple-600 dark:text-purple-400" />
               </div>
-              <h4 className="text-sm sm:text-base md:text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
                 ዲጂታል ቤተ-መጽሐፍት
               </h4>
-              <p className="mt-1.5 sm:mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 ፒዲኤፍ መጻሕፍትና ንባብ ማዕከል።
               </p>
             </Link>
           </div>
         </div>
+
+        {/* ============================================================ */}
+        {/* FOOTER — COMPACT TELEGRAM BANNER                             */}
+        {/* ============================================================ */}
+        {/*
+          TODO: Replace the `href="https://t.me/Basira_on"` below with your real Telegram channel link.
+          Example:
+            href="https://t.me/Basira"
+            href="Basira_on"
+        */}
+        <a
+          href="https://t.me/Basira_on"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-10 group flex items-center gap-3 rounded-xl border border-sky-200/70 dark:border-sky-900/50 bg-sky-50/70 dark:bg-sky-950/30 px-4 py-3 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
+        >
+          <div
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg shadow-sm"
+            style={{ backgroundColor: '#0088cc' }}
+          >
+            <Send className="h-4 w-4 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
+              የቴሌግራም ቻናላችንን ይቀላቀሉ
+            </h3>
+          </div>
+          <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
+            Join
+          </span>
+        </a>
+
+        {/* Footer note */}
+        <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
+          © {new Date().getFullYear()} ባሲራ · Basira
+        </p>
       </div>
     </div>
   );
