@@ -36,6 +36,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // If there is an error or no code, redirect to the login page
-  return NextResponse.redirect(`${origin}/login`)
+  // If there is an error or no code, redirect to the register page
+  return NextResponse.redirect(`${origin}/register`)
 }
