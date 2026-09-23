@@ -1,3 +1,4 @@
+// app/login/page.tsx
 'use client';
 
 import { useState, useCallback, FormEvent } from 'react';
@@ -75,29 +76,77 @@ export default function LoginPage() {
 
       try {
         setIsLoading(true);
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
+
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
           password,
         });
 
+        // -----------------------------------------------------------------
+        // ERROR HANDLING
+        // -----------------------------------------------------------------
         if (error) {
-          if (error.message.includes('Invalid login credentials')) {
+          const msg = (error.message || '').toLowerCase();
+
+          if (
+            msg.includes('invalid login credentials') ||
+            msg.includes('invalid_grant')
+          ) {
             setErrorMessage('ኢሜይል ወይም የይለፍ ቃል ትክክል አይደለም');
+          } else if (
+            msg.includes('email not confirmed') ||
+            msg.includes('not confirmed')
+          ) {
+            setErrorMessage(
+              'ኢሜይልዎ ገና አልተረጋገጠም። እባክዎ የማረጋገጫ ማስፈንጠሪያውን ይጫኑ።'
+            );
           } else {
             setErrorMessage(error.message);
           }
+
+          setIsLoading(false);
           return;
         }
 
-        // Redirect to dashboard on success
-        router.push('/dashboard');
-        router.refresh(); // ensure fresh server state
+        // -----------------------------------------------------------------
+        // SUCCESS — hard redirect to /dashboard.
+        //
+        // `window.location.href` (a FULL page reload) is used instead of the
+        // Next.js client-side router so the newly-set Supabase auth cookies
+        // are guaranteed to be sent with the very next request. This lets
+        // `middleware.ts` and Server Components pick up the fresh session
+        // immediately, avoiding the "stuck on /login" issue caused by the
+        // client-side push racing against cookie propagation.
+        //
+        // We also call `router.refresh()` first (best-effort, wrapped in
+        // try/catch) so that any mounted App Router state is invalidated
+        // before the hard navigation takes over.
+        // -----------------------------------------------------------------
+        try {
+          router.refresh();
+        } catch {
+          // ignore — the hard redirect below is the source of truth
+        }
+
+        // Defensive: proceed only if we actually got a session back.
+        // (If `data.session` is null for an edge-case backend config, we
+        // still hard-redirect — middleware will validate the cookie.)
+        if (data?.session) {
+          window.location.href = '/dashboard';
+          return;
+        }
+
+        // Fallback path — some Supabase configurations return success
+        // without `session` in unusual cases. Send the user anyway.
+        window.location.href = '/dashboard';
       } catch (err) {
         setErrorMessage('ያልተጠበቀ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ');
         console.error('Login error:', err);
-      } finally {
         setIsLoading(false);
       }
+      // NOTE: no `finally { setIsLoading(false); }` on the success path —
+      // we intentionally leave the spinner visible during the hard redirect
+      // so the button doesn't flip back to "ይግቡ" mid-navigation.
     },
     [email, password, router]
   );

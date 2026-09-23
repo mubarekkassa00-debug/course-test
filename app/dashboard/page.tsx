@@ -257,30 +257,61 @@ export default function DashboardPage() {
     });
   }, []);
 
-  // ---------- Auth ----------
+  // ---------------------------------------------------------------------------
+  // AUTH GUARD
+  //
+  // Verifies the Supabase session on mount.
+  //   • Valid session    → set the user and clear the loading flag.
+  //   • Missing session  → redirect immediately to /login via `router.replace`
+  //                        (replace, not push, so the protected /dashboard
+  //                        doesn't linger in browser history).
+  //   • Thrown error     → redirect to /login and log for debugging.
+  //
+  // The `cancelled` flag prevents state updates after the component
+  // unmounts (which happens right after the redirect), avoiding any
+  // "set state on unmounted component" warnings and infinite loops.
+  //
+  // NOTE: `supabase.auth.getUser()` verifies the JWT against the Auth
+  // server, so an invalid or expired session correctly falls through to
+  // the redirect branch. Middleware also guards `/dashboard` server-side
+  // for defense in depth.
+  // ---------------------------------------------------------------------------
   useEffect(() => {
+    let cancelled = false;
+
     const fetchUser = async () => {
       try {
         const {
           data: { user: authUser },
+          error,
         } = await supabase.auth.getUser();
-        if (authUser) {
-          setUser({
-            id: authUser.id,
-            email: authUser.email,
-            full_name: authUser.user_metadata?.full_name,
-          });
-        } else {
-          router.push('/login');
+
+        if (cancelled) return;
+
+        // No valid session (or an auth error) → go straight to /login.
+        if (error || !authUser) {
+          router.replace('/login');
+          return;
         }
-      } catch (error) {
-        console.error('Error fetching user:', readErrorMessage(error));
-        router.push('/login');
-      } finally {
+
+        setUser({
+          id: authUser.id,
+          email: authUser.email,
+          full_name: authUser.user_metadata?.full_name,
+        });
         setLoading(false);
+      } catch (err) {
+        if (cancelled) return;
+        console.error('Error fetching user:', readErrorMessage(err));
+        router.replace('/login');
       }
     };
+
     fetchUser();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   // ---------- Hijri date ----------
@@ -404,10 +435,22 @@ export default function DashboardPage() {
     };
   }, [user?.id]);
 
+  // ---------------------------------------------------------------------------
+  // LOGOUT — clears the Supabase session and hard-redirects to /login.
+  //
+  // `window.location.href` (a full page reload) is used so the cleared
+  // session cookies are guaranteed to propagate before the next request
+  // hits the server, mirroring the login flow's hard-redirect strategy.
+  // The middleware then sees no session and keeps the user on /login.
+  // ---------------------------------------------------------------------------
   const handleLogout = async () => {
     setLoggingOut(true);
-    await supabase.auth.signOut();
-    router.push('/login');
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+    window.location.href = '/login';
   };
 
   // -------------------------------------------------------------------------

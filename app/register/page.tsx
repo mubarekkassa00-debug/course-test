@@ -23,6 +23,16 @@ const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const MIN_PASSWORD_LENGTH = 6;
 
 // ---------------------------------------------------------------------------
+// Explicit production callback URL for the email verification link.
+// This is the URL that Supabase will embed in the verification email.
+// After the user clicks the link, they land on /auth/callback where the
+// OAuth/verification code is exchanged for a session, then redirected to
+// /dashboard (or the `next` param).
+// ---------------------------------------------------------------------------
+const EMAIL_REDIRECT_URL =
+  'https://course-test-two.vercel.app/auth/callback';
+
+// ---------------------------------------------------------------------------
 // Google "G" brand icon (inline SVG so we don't pull an extra dependency).
 // ---------------------------------------------------------------------------
 function GoogleIcon({ className }: { className?: string }) {
@@ -113,6 +123,17 @@ export default function RegisterPage() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // EMAIL + PASSWORD REGISTRATION
+  //
+  // Flow:
+  //   1. Validate form (client-side).
+  //   2. Call `supabase.auth.signUp()` with:
+  //        • user metadata: { full_name }
+  //        • emailRedirectTo: the explicit production callback URL.
+  //   3. On success → show the "check your email" success screen.
+  //   4. On error → show an Amharic error message tailored to the error type.
+  // ---------------------------------------------------------------------------
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -129,16 +150,63 @@ export default function RegisterPage() {
           data: {
             full_name: formData.fullName.trim(),
           },
-          emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+          // Explicit production callback URL — Supabase embeds this in the
+          // verification email. After the user clicks the link, they land
+          // on /auth/callback, which exchanges the code for a session and
+          // forwards them to /dashboard.
+          emailRedirectTo: EMAIL_REDIRECT_URL,
         },
       });
 
+      // -----------------------------------------------------------------
+      // Supabase-side error (network, rate-limit, invalid email, etc.)
+      // -----------------------------------------------------------------
       if (error) {
-        setErrorMessage(error.message);
+        const msg = (error.message || '').toLowerCase();
+
+        if (
+          msg.includes('already registered') ||
+          msg.includes('already been registered') ||
+          msg.includes('user already exists')
+        ) {
+          setErrorMessage(
+            'በዚህ ኢሜይል የተመዘገበ መለያ አስቀድሞ አለ። እባክዎ ይግቡ ወይም የይለፍ ቃልዎን ያስታውሱ።'
+          );
+        } else if (
+          msg.includes('rate limit') ||
+          msg.includes('too many requests')
+        ) {
+          setErrorMessage(
+            'በጣም ብዙ ሙከራዎች ተደርገዋል። እባክዎ ትንሽ ቆይተው እንደገና ይሞክሩ።'
+          );
+        } else if (msg.includes('password')) {
+          setErrorMessage(
+            'የይለፍ ቃሉ ተቀባይነት አላገኘም። እባክዎ ጠንካራ የይለፍ ቃል ይምረጡ።'
+          );
+        } else if (
+          msg.includes('network') ||
+          msg.includes('fetch') ||
+          msg.includes('failed to fetch')
+        ) {
+          setErrorMessage(
+            'የኢንተርኔት ግንኙነት ችግር አለ። እባክዎ ግንኙነትዎን አረጋግጠው እንደገና ይሞክሩ።'
+          );
+        } else {
+          setErrorMessage(
+            error.message ||
+              'ምዝገባውን ማጠናቀቅ አልተቻለም። እባክዎ እንደገና ይሞክሩ።'
+          );
+        }
         setFormState('error');
         return;
       }
 
+      // -----------------------------------------------------------------
+      // Defensive check: Supabase returns an empty `identities` array when
+      // the email is already registered (and email enumeration protection
+      // is enabled). In that case we surface a clear message instead of
+      // pretending the signup succeeded.
+      // -----------------------------------------------------------------
       if (data?.user?.identities?.length === 0) {
         setErrorMessage(
           'በዚህ ኢሜይል የተመዘገበ መለያ አስቀድሞ አለ። እባክዎ ይግቡ።'
@@ -147,6 +215,11 @@ export default function RegisterPage() {
         return;
       }
 
+      // -----------------------------------------------------------------
+      // Success — show the "verify your email" screen.
+      // The user will receive a verification email at `formData.email`.
+      // Clicking the link lands on /auth/callback → /dashboard.
+      // -----------------------------------------------------------------
       setFormState('success');
     } catch (err) {
       setErrorMessage(
@@ -163,9 +236,6 @@ export default function RegisterPage() {
   // the OAuth code exchange happens server-side (via /auth/callback), which
   // then forwards the authenticated user to the destination passed via the
   // `?next=` query parameter.
-  //
-  // In this case we explicitly pass `?next=/dashboard` so that after Google
-  // authentication completes, the user is sent straight to the dashboard.
   // ---------------------------------------------------------------------------
   const handleGoogleSignUp = async () => {
     setGoogleLoading(true);
