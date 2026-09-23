@@ -129,7 +129,7 @@ export default function RegisterPage() {
           data: {
             full_name: formData.fullName.trim(),
           },
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
         },
       });
 
@@ -161,13 +161,11 @@ export default function RegisterPage() {
   // ---------------------------------------------------------------------------
   // Google OAuth sign-up — redirects to the Supabase Auth callback route so
   // the OAuth code exchange happens server-side (via /auth/callback), which
-  // then forwards the authenticated user to the dashboard.
+  // then forwards the authenticated user to the destination passed via the
+  // `?next=` query parameter.
   //
-  // The `redirectTo` value is built from `window.location.origin` so it works
-  // in every environment automatically:
-  //   • Production  → https://course-test-two.vercel.app/auth/callback
-  //   • Preview     → https://<preview>.vercel.app/auth/callback
-  //   • Local dev   → http://localhost:3000/auth/callback
+  // In this case we explicitly pass `?next=/dashboard` so that after Google
+  // authentication completes, the user is sent straight to the dashboard.
   // ---------------------------------------------------------------------------
   const handleGoogleSignUp = async () => {
     setGoogleLoading(true);
@@ -178,7 +176,7 @@ export default function RegisterPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
         },
       });
 
