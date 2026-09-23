@@ -24,13 +24,15 @@ export async function GET(request: Request) {
                 cookieStore.set(name, value, options)
               )
             } catch {
-              // The `setAll` method was called from a Server Component.
+              // Ignore when called from Server Component
             }
           },
         },
       }
     )
+    
     const { error } = await supabase.auth.exchangeCodeForSession(code)
+    
     if (!error) {
       const forwardedHost = request.headers.get('x-forwarded-host')
       const isLocalEnv = process.env.NODE_ENV === 'development'
@@ -42,11 +44,9 @@ export async function GET(request: Request) {
       } else {
         return NextResponse.redirect(`${origin}${next}`)
       }
-    } else {
-      console.error('Supabase auth callback error:', error.message)
     }
   }
 
-  // If there is an error or no code, redirect to login with an error query
-  return NextResponse.redirect(`${origin}/login?error=auth_failed`)
+  // Fallback redirect to dashboard when token hash is handled client-side
+  return NextResponse.redirect(`${origin}${next}`)
 }
