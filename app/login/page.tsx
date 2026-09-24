@@ -58,6 +58,24 @@ export default function LoginPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [googleLoading, setGoogleLoading] = useState(false);
 
+  // ---------------------------------------------------------------------------
+  // EMAIL + PASSWORD SIGN-IN
+  //
+  // Flow:
+  //   1. preventDefault + client-side validation.
+  //   2. `supabase.auth.signInWithPassword()` — writes the session cookies.
+  //   3. On success → immediate HARD redirect via `window.location.href`.
+  //      A hard reload guarantees the freshly-set cookies are sent with the
+  //      very next request, so middleware.ts + Server Components see the new
+  //      session on the first try. This is what fixes the "stuck on /login"
+  //      symptom caused by client-side router navigation racing against
+  //      cookie propagation.
+  //   4. On error → show an Amharic message and reset the loading state.
+  //
+  // NOTE: `setIsLoading(false)` is intentionally NOT called on the success
+  // path — the spinner should remain visible until the browser actually
+  // navigates away, so the button doesn't flash back to "ይግቡ" mid-redirect.
+  // ---------------------------------------------------------------------------
   const handleLogin = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -74,17 +92,17 @@ export default function LoginPage() {
         return;
       }
 
-      try {
-        setIsLoading(true);
+      setIsLoading(true);
 
+      try {
         const { data, error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
           password,
         });
 
-        // -----------------------------------------------------------------
+        // -------------------------------------------------------------
         // ERROR HANDLING
-        // -----------------------------------------------------------------
+        // -------------------------------------------------------------
         if (error) {
           const msg = (error.message || '').toLowerCase();
 
@@ -108,45 +126,28 @@ export default function LoginPage() {
           return;
         }
 
-        // -----------------------------------------------------------------
-        // SUCCESS — hard redirect to /dashboard.
+        // -------------------------------------------------------------
+        // SUCCESS — HARD REDIRECT
         //
-        // `window.location.href` (a FULL page reload) is used instead of the
-        // Next.js client-side router so the newly-set Supabase auth cookies
-        // are guaranteed to be sent with the very next request. This lets
-        // `middleware.ts` and Server Components pick up the fresh session
-        // immediately, avoiding the "stuck on /login" issue caused by the
-        // client-side push racing against cookie propagation.
-        //
-        // We also call `router.refresh()` first (best-effort, wrapped in
-        // try/catch) so that any mounted App Router state is invalidated
-        // before the hard navigation takes over.
-        // -----------------------------------------------------------------
-        try {
-          router.refresh();
-        } catch {
-          // ignore — the hard redirect below is the source of truth
-        }
-
-        // Defensive: proceed only if we actually got a session back.
-        // (If `data.session` is null for an edge-case backend config, we
-        // still hard-redirect — middleware will validate the cookie.)
+        // We rely solely on `window.location.href`. No router.push(),
+        // no router.refresh(), no client-side navigation. A full page
+        // reload is the most reliable way to ensure the browser picks up
+        // the newly-set Supabase auth cookies before middleware runs.
+        // -------------------------------------------------------------
         if (data?.session) {
           window.location.href = '/dashboard';
           return;
         }
 
-        // Fallback path — some Supabase configurations return success
-        // without `session` in unusual cases. Send the user anyway.
+        // Defensive fallback: if for any reason the session is null but
+        // no error was thrown (unusual backend config), still navigate.
+        // Middleware will validate the cookie server-side.
         window.location.href = '/dashboard';
       } catch (err) {
         setErrorMessage('ያልተጠበቀ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ');
         console.error('Login error:', err);
         setIsLoading(false);
       }
-      // NOTE: no `finally { setIsLoading(false); }` on the success path —
-      // we intentionally leave the spinner visible during the hard redirect
-      // so the button doesn't flip back to "ይግቡ" mid-navigation.
     },
     [email, password, router]
   );
