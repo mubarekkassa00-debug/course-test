@@ -258,101 +258,104 @@ export default function DashboardPage() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // AUTH GUARD — RESILIENT SESSION CHECK
+  // AUTH GUARD — RESILIENT SESSION CHECK via `onAuthStateChange`
   //
   // PROBLEM WE ARE SOLVING:
-  //   Immediately after a successful `signInWithPassword()` + hard redirect to
-  //   /dashboard, the Supabase JS client sometimes hasn't finished hydrating
-  //   its in-memory auth state from cookies yet. A naive one-shot
-  //   `getUser()` call therefore returns `null` and the page bounces back to
-  //   /login — the "redirect loop" symptom.
+  //   When the user navigates /courses → /dashboard (or hard-refreshes), the
+  //   Supabase client needs a brief moment to hydrate its session state from
+  //   localStorage / cookies. A one-shot `getSession()` call races against
+  //   that hydration, so on the very first tick it can return `null` and the
+  //   guard bounces the user back to `/login`.
   //
-  // STRATEGY (in priority order):
-  //   1. `getSession()` FIRST — this reads the session synchronously from
-  //      cookies WITHOUT a server round-trip. It's the fastest, most reliable
-  //      source of truth for "does a session cookie exist?".
-  //   2. If no session is found, DO NOT redirect immediately. Retry a couple
-  //      of times with a short delay — this covers the brief window where the
-  //      Supabase SDK is still initialising its cookie storage.
-  //   3. Only after the retries are exhausted (no session at all) do we
-  //      redirect to /login via `router.replace()`.
+  // STRATEGY:
+  //   Subscribe to `supabase.auth.onAuthStateChange` FIRST — before any
+  //   navigation happens. Supabase fires the `INITIAL_SESSION` event exactly
+  //   once, AFTER its own hydration is finished, carrying either the current
+  //   session or `null`. That is our single source of truth:
   //
-  // The `cancelled` flag + `timeoutId` cleanup prevent state updates and
-  // timers from leaking after unmount, and `loading` stays true throughout
-  // so the splash screen remains visible until auth resolution is complete.
+  //     • INITIAL_SESSION with a user → populate `user`, stop loading.
+  //     • INITIAL_SESSION with null   → no session exists → go to /login.
+  //     • SIGNED_IN / TOKEN_REFRESHED → keep `user` in sync with the SDK.
+  //     • SIGNED_OUT                  → go to /login.
+  //
+  //   A 5-second safety timeout guarantees we never get stuck on the loading
+  //   spinner if the SDK fails to emit `INITIAL_SESSION` for any reason.
+  //
+  //   The `resolved` flag ensures we only act on the very first authoritative
+  //   signal, and the `cancelled` flag prevents state updates after unmount.
   // ---------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let resolved = false;
+    let safetyTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    const MAX_ATTEMPTS = 3;
-    const RETRY_DELAY_MS = 200;
+    const finalize = (hasSession: boolean, sessionUser?: any) => {
+      if (resolved || cancelled) return;
+      resolved = true;
 
-    const checkAuth = async (attempt: number) => {
+      if (safetyTimeout) {
+        clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+
+      if (hasSession && sessionUser) {
+        setUser({
+          id: sessionUser.id,
+          email: sessionUser.email,
+          full_name: sessionUser.user_metadata?.full_name,
+        });
+        setLoading(false);
+      } else {
+        router.replace('/login');
+      }
+    };
+
+    // Safety net — if `INITIAL_SESSION` never fires, don't hang forever.
+    safetyTimeout = setTimeout(() => {
+      if (!cancelled && !resolved) {
+        resolved = true;
+        router.replace('/login');
+      }
+    }, 5000);
+
+    // Subscribe FIRST so we never miss the `INITIAL_SESSION` event.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
 
-      try {
-        // ---------------------------------------------------------------
-        // 1. Fast path — read the session from cookies (no network).
-        // ---------------------------------------------------------------
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (cancelled) return;
-
+      if (event === 'INITIAL_SESSION') {
+        // Authoritative hydration signal — act on it exactly once.
         if (session?.user) {
-          // Session cookie is present → populate user and stop loading.
+          finalize(true, session.user);
+        } else {
+          finalize(false);
+        }
+        return;
+      }
+
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        // Keep the user in sync with the SDK for the lifetime of the page.
+        if (session?.user) {
           setUser({
             id: session.user.id,
             email: session.user.email,
             full_name: session.user.user_metadata?.full_name,
           });
           setLoading(false);
-          return;
         }
+        return;
+      }
 
-        // ---------------------------------------------------------------
-        // 2. No session yet. Give the SDK a brief grace period and retry.
-        //    This is what prevents the "bounce back to /login" bug right
-        //    after sign-in.
-        // ---------------------------------------------------------------
-        if (attempt < MAX_ATTEMPTS) {
-          timeoutId = setTimeout(() => {
-            if (!cancelled) checkAuth(attempt + 1);
-          }, RETRY_DELAY_MS);
-          return;
-        }
-
-        // ---------------------------------------------------------------
-        // 3. Retries exhausted → the user truly has no session.
-        //    Use `replace` (not `push`) so /dashboard doesn't stay in the
-        //    browser history after redirect.
-        // ---------------------------------------------------------------
-        router.replace('/login');
-      } catch (err) {
-        if (cancelled) return;
-        console.error(
-          '[Dashboard] auth check failed:',
-          readErrorMessage(err)
-        );
-
-        if (attempt < MAX_ATTEMPTS) {
-          timeoutId = setTimeout(() => {
-            if (!cancelled) checkAuth(attempt + 1);
-          }, RETRY_DELAY_MS);
-          return;
-        }
-
+      if (event === 'SIGNED_OUT') {
         router.replace('/login');
       }
-    };
-
-    checkAuth(1);
+    });
 
     return () => {
       cancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
+      if (safetyTimeout) clearTimeout(safetyTimeout);
+      subscription.unsubscribe();
     };
   }, [router]);
 
