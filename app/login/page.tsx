@@ -153,9 +153,23 @@ export default function LoginPage() {
   );
 
   // ---------------------------------------------------------------------------
-  // Google OAuth sign-in — redirects to the Supabase Auth callback route so
-  // the OAuth code exchange happens server-side (via /auth/callback), which
-  // then forwards the authenticated user to the dashboard.
+  // Google OAuth sign-in
+  //
+  // DIRECT-TO-DASHBOARD STRATEGY:
+  //
+  //   Supabase's default OAuth flow returns the session as a URL hash
+  //   fragment on the client (`#access_token=...&refresh_token=...`).
+  //   Because hash fragments are NOT sent to the server, a server-side
+  //   `/auth/callback` route cannot read them — which is why the previous
+  //   implementation failed with "no code provided".
+  //
+  //   By pointing `redirectTo` directly at `/dashboard`, we let the
+  //   Supabase JS client (already loaded in the browser via `@/lib/supabase`)
+  //   detect and consume the hash fragment on the destination page.
+  //
+  //   Middleware (`middleware.ts`) also has a cookie-presence check on
+  //   `/dashboard`, so the brief window before the client writes cookies
+  //   does NOT cause a redirect loop.
   // ---------------------------------------------------------------------------
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
@@ -165,7 +179,7 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback?next=/dashboard`,
+          redirectTo: `${window.location.origin}/dashboard`,
         },
       });
 
