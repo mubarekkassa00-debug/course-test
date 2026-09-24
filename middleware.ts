@@ -36,16 +36,20 @@ export async function middleware(request: NextRequest) {
 
   const url = request.nextUrl.clone()
 
-  // Redirect authenticated users away from auth pages to dashboard
   if (user && (url.pathname === '/login' || url.pathname === '/register')) {
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)
   }
 
-  // Redirect unauthenticated users from protected dashboard routes to login
   if (!user && url.pathname.startsWith('/dashboard')) {
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+    const hasAuthCookie = request.cookies.getAll().some(cookie => 
+      cookie.name.includes('sb-') && cookie.name.includes('-auth-token')
+    )
+
+    if (!hasAuthCookie) {
+      url.pathname = '/login'
+      return NextResponse.redirect(url)
+    }
   }
 
   return response
