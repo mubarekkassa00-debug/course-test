@@ -1,7 +1,7 @@
 'use client';
-// app/admin/payments/page.tsx
+// app/admin/payments/AdminPaymentsClient.tsx
 //
-// Admin payment-approval dashboard.
+// Admin payment-approval dashboard — CLIENT component.
 //
 // Features:
 //   • Loads every row from `public.payments` (newest first).
@@ -237,10 +237,10 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
-// Page
+// Page (client UI)
 // ---------------------------------------------------------------------------
 
-export default function AdminPaymentsPage() {
+export default function AdminPaymentsClient() {
   // -------------------------------------------------------------------------
   // State — always initialized to an empty array so it is never `null`.
   // -------------------------------------------------------------------------
