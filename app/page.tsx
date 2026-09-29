@@ -27,6 +27,7 @@ import {
   MessageCircle,
   ChevronDown,
   HelpCircle,
+  LogIn,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -171,8 +172,8 @@ const translations = {
         { href: '/about', label: 'About Basira' },
       ],
       accountLinks: [
-        { href: '/auth', label: 'Sign In' },
-        { href: '/auth', label: 'Create Account' },
+        { href: '/login', label: 'Sign In' },
+        { href: '/register', label: 'Create Account' },
         { href: '/about', label: 'About Basira' },
         { href: '/contact', label: 'Contact' },
       ],
@@ -317,8 +318,8 @@ const translations = {
         { href: '/about', label: 'ስለ ባሲራ' },
       ],
       accountLinks: [
-        { href: '/auth', label: 'ይግቡ' },
-        { href: '/auth', label: 'አካውንት ይፍጠሩ' },
+        { href: '/login', label: 'ይግቡ' },
+        { href: '/register', label: 'አካውንት ይፍጠሩ' },
         { href: '/about', label: 'ስለ ባሲራ' },
         { href: '/contact', label: 'አግኙን' },
       ],
@@ -445,14 +446,17 @@ export default function LandingPage() {
                 </button>
               </div>
 
+              {/* Sign In → /login */}
               <Link
-                href="/auth"
+                href="/login"
                 className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 {t.header.signIn}
               </Link>
+
+              {/* Register → /register */}
               <Link
-                href="/auth"
+                href="/register"
                 className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-emerald-900/20 hover:from-emerald-500 hover:to-emerald-600 transition-all"
               >
                 {t.header.register}
@@ -462,6 +466,7 @@ export default function LandingPage() {
 
             {/* Mobile actions */}
             <div className="md:hidden flex items-center gap-2">
+              {/* Language toggle (mobile) */}
               <button
                 type="button"
                 onClick={toggleLang}
@@ -472,12 +477,23 @@ export default function LandingPage() {
                 {lang === 'en' ? 'አማርኛ' : 'EN'}
               </button>
 
+              {/* Sign In (mobile, icon-only) → /login */}
               <Link
-                href="/auth"
+                href="/login"
+                aria-label={t.header.signIn}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <LogIn className="h-4 w-4" />
+              </Link>
+
+              {/* Register (mobile) → /register */}
+              <Link
+                href="/register"
                 className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
               >
                 {t.header.register}
               </Link>
+
               <button
                 type="button"
                 aria-label={t.header.menu}
@@ -520,13 +536,16 @@ export default function LandingPage() {
               </p>
 
               <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center lg:justify-start">
+                {/* Get Started → /register */}
                 <Link
-                  href="/auth"
+                  href="/register"
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 px-6 py-3.5 text-base font-bold text-white shadow-lg shadow-emerald-900/20 hover:from-emerald-500 hover:to-emerald-600 transition-all"
                 >
                   {t.hero.getStarted}
                   <ArrowRight className="h-4 w-4" />
                 </Link>
+
+                {/* Explore Courses → /courses */}
                 <Link
                   href="/courses"
                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white/80 dark:bg-slate-900/60 px-6 py-3.5 text-base font-bold text-slate-800 dark:text-slate-100 hover:bg-white dark:hover:bg-slate-900 transition-colors"
@@ -895,15 +914,18 @@ export default function LandingPage() {
               </p>
 
               <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+                {/* Join Now → /register */}
                 <Link
-                  href="/auth"
+                  href="/register"
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3.5 text-base font-bold text-emerald-800 shadow-lg hover:bg-emerald-50 transition-colors"
                 >
                   {t.cta.joinNow}
                   <ArrowRight className="h-4 w-4" />
                 </Link>
+
+                {/* Sign In → /login */}
                 <Link
-                  href="/auth"
+                  href="/login"
                   className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/40 bg-white/10 backdrop-blur px-6 py-3.5 text-base font-bold text-white hover:bg-white/20 transition-colors"
                 >
                   {t.cta.signIn}

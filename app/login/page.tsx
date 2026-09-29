@@ -1,9 +1,9 @@
 // app/login/page.tsx
 'use client';
 
-import { useState, useCallback, FormEvent } from 'react';
+import { useState, useCallback, FormEvent, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { createBrowserClient } from '@supabase/ssr';
 import {
   Mail,
   Lock,
@@ -48,6 +48,21 @@ function GoogleIcon({ className }: { className?: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Create a single browser Supabase client for the whole app.
+//
+// `createBrowserClient` from `@supabase/ssr`:
+//   • Stores the session in cookies (not localStorage), so middleware.ts
+//     and Server Components can read it.
+//   • Uses the PKCE flow by default — which is exactly what we need so
+//     Google OAuth returns `?code=...` to `/auth/callback` instead of
+//     `#access_token=...` on the root URL.
+// ---------------------------------------------------------------------------
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -63,18 +78,13 @@ export default function LoginPage() {
   //
   // Flow:
   //   1. preventDefault + client-side validation.
-  //   2. `supabase.auth.signInWithPassword()` — writes the session cookies.
+  //   2. `supabase.auth.signInWithPassword()` — writes session cookies
+  //      (createBrowserClient stores the session in cookies, not localStorage).
   //   3. On success → immediate HARD redirect via `window.location.href`.
   //      A hard reload guarantees the freshly-set cookies are sent with the
   //      very next request, so middleware.ts + Server Components see the new
-  //      session on the first try. This is what fixes the "stuck on /login"
-  //      symptom caused by client-side router navigation racing against
-  //      cookie propagation.
+  //      session on the first try.
   //   4. On error → show an Amharic message and reset the loading state.
-  //
-  // NOTE: `setIsLoading(false)` is intentionally NOT called on the success
-  // path — the spinner should remain visible until the browser actually
-  // navigates away, so the button doesn't flash back to "ይግቡ" mid-redirect.
   // ---------------------------------------------------------------------------
   const handleLogin = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
@@ -128,20 +138,12 @@ export default function LoginPage() {
 
         // -------------------------------------------------------------
         // SUCCESS — HARD REDIRECT
-        //
-        // We rely solely on `window.location.href`. No router.push(),
-        // no router.refresh(), no client-side navigation. A full page
-        // reload is the most reliable way to ensure the browser picks up
-        // the newly-set Supabase auth cookies before middleware runs.
         // -------------------------------------------------------------
         if (data?.session) {
           window.location.href = '/dashboard';
           return;
         }
 
-        // Defensive fallback: if for any reason the session is null but
-        // no error was thrown (unusual backend config), still navigate.
-        // Middleware will validate the cookie server-side.
         window.location.href = '/dashboard';
       } catch (err) {
         setErrorMessage('ያልተጠበቀ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ');
@@ -149,27 +151,25 @@ export default function LoginPage() {
         setIsLoading(false);
       }
     },
-    [email, password, router]
+    [email, password]
   );
 
   // ---------------------------------------------------------------------------
   // Google OAuth sign-in
   //
-  // DIRECT-TO-DASHBOARD STRATEGY:
+  // PKCE FLOW (via @supabase/ssr):
   //
-  //   Supabase's default OAuth flow returns the session as a URL hash
-  //   fragment on the client (`#access_token=...&refresh_token=...`).
-  //   Because hash fragments are NOT sent to the server, a server-side
-  //   `/auth/callback` route cannot read them — which is why the previous
-  //   implementation failed with "no code provided".
+  //   `createBrowserClient` enables PKCE by default. This means Supabase
+  //   now redirects Google's response back to our `/auth/callback` route
+  //   with a `?code=...` query parameter — NOT a `#access_token=...` hash.
   //
-  //   By pointing `redirectTo` directly at `/dashboard`, we let the
-  //   Supabase JS client (already loaded in the browser via `@/lib/supabase`)
-  //   detect and consume the hash fragment on the destination page.
+  //   The callback route (`app/auth/callback/route.ts`) then performs
+  //   `exchangeCodeForSession(code)` server-side and sets the auth cookies
+  //   before redirecting the user to `/dashboard`.
   //
-  //   Middleware (`middleware.ts`) also has a cookie-presence check on
-  //   `/dashboard`, so the brief window before the client writes cookies
-  //   does NOT cause a redirect loop.
+  //   This is the correct, secure pattern for Next.js App Router — cookies
+  //   are set on the server, so `middleware.ts` and Server Components see
+  //   the session immediately on the next request.
   // ---------------------------------------------------------------------------
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
@@ -179,7 +179,7 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/dashboard`,
+          redirectTo: `${window.location.origin}/auth/callback`,
         },
       });
 
@@ -190,9 +190,7 @@ export default function LoginPage() {
       }
 
       // On success, Supabase redirects the browser to Google's consent
-      // screen — no further client-side action is needed here. We keep
-      // `googleLoading` true so the button shows the spinner during the
-      // in-flight redirect.
+      // screen — no further client-side action is needed here.
     } catch (err) {
       setErrorMessage('በ Google መግባት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
       console.error('Google login error:', err);

@@ -7,19 +7,33 @@ export async function GET(request: Request) {
   const code = requestUrl.searchParams.get('code')
   const next = requestUrl.searchParams.get('next') ?? '/dashboard'
 
-  // 1. Vercel ላይ ትክክለኛውን ዶሜን (Domain) ለማግኘት
+  // -------------------------------------------------------------------------
+  // 1. Vercel / Proxy-aware origin resolution
+  //    (On Vercel, `request.url` may point to the internal deployment host,
+  //     so we prefer the x-forwarded-host header when available.)
+  // -------------------------------------------------------------------------
   const forwardedHost = request.headers.get('x-forwarded-host')
-  const origin = forwardedHost ? `https://${forwardedHost}` : requestUrl.origin
+  const forwardedProto = request.headers.get('x-forwarded-proto') ?? 'https'
+  const isLocalEnv = process.env.NODE_ENV === 'development'
 
-  // Code ከሌለ በቀጥታ ወደ Login ይመልሰዋል
+  const origin = isLocalEnv
+    ? requestUrl.origin
+    : forwardedHost
+      ? `${forwardedProto}://${forwardedHost}`
+      : requestUrl.origin
+
+  // -------------------------------------------------------------------------
+  // 2. Missing `code` — OAuth provider or email link failed upstream
+  // -------------------------------------------------------------------------
   if (!code) {
     return NextResponse.redirect(`${origin}/login?error=no-code-provided`)
   }
 
-  // 2. የ Next.js Cookie Storeን ማንበብ
+  // -------------------------------------------------------------------------
+  // 3. Read the Next.js cookie store & create the Supabase SSR client
+  // -------------------------------------------------------------------------
   const cookieStore = await cookies()
 
-  // 3. Supabase SSR Client መፍጠር እና ኩኪዎችን ማስተካከል
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -34,23 +48,38 @@ export async function GET(request: Request) {
               cookieStore.set(name, value, options)
             })
           } catch (error) {
-            // Route Handler ውስጥ ስለሆነ ይህ ብዙ ጊዜ አይፈጠርም
-            console.error("Cookie setting error:", error)
+            // In a Route Handler this normally does not throw, but we guard
+            // against it so a cookie failure never blocks the redirect.
+            console.error('Cookie set error in auth callback:', error)
           }
         },
       },
     }
   )
 
-  // 4. Code ወደ Session መቀየር (Auth Code Exchange)
+  // -------------------------------------------------------------------------
+  // 4. Exchange the OAuth / email code for a real session
+  // -------------------------------------------------------------------------
   const { error } = await supabase.auth.exchangeCodeForSession(code)
 
-  // ኤረር ካጋጠመ ወደ ሎጊን ገጽ ከነ ምክኒያቱ ይመልሰዋል
+  // -------------------------------------------------------------------------
+  // 5. On failure — send the user back to /login with an error flag
+  // -------------------------------------------------------------------------
   if (error) {
     console.error('Supabase Auth Callback Error:', error.message)
-    return NextResponse.redirect(`${origin}/login?error=auth-failed`)
+    return NextResponse.redirect(`${origin}/login?error=auth_failed`)
   }
 
-  // 5. ያለ ምንም ችግር Session ከተፈጠረ፣ ወደ ዳሽቦርድ (ወይም ወደ ተፈለገው ገጽ) ያስገባዋል
-  return NextResponse.redirect(`${origin}${next}`)
+  // -------------------------------------------------------------------------
+  // 6. Sanitize `next` — must be an internal path (starts with `/`,
+  //    but not `//` which would be treated as a protocol-relative URL)
+  // -------------------------------------------------------------------------
+  const safeNext =
+    next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
+
+  // -------------------------------------------------------------------------
+  // 7. Success — session cookies are now set on the response,
+  //    redirect the user to the dashboard (or the requested `next` path)
+  // -------------------------------------------------------------------------
+  return NextResponse.redirect(`${origin}${safeNext}`)
 }
