@@ -41,7 +41,7 @@ const HERO_IMAGE_URL =
   'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?auto=format&fit=crop&w=1600&q=80';
 
 // ---------------------------------------------------------------------------
-// Types & Helpers
+// Types & Constants
 // ---------------------------------------------------------------------------
 
 type DashboardUser = {
@@ -66,22 +66,10 @@ type PaymentStatus = 'none' | 'pending' | 'approved' | 'rejected';
 // ---------------------------------------------------------------------------
 
 const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
-  {
-    slug: 'usul_al_thalatha',
-    displayName: 'ኡሱሉ ሰላሳ',
-  },
-  {
-    slug: 'arbain',
-    displayName: 'አርባኢን ነወዊ',
-  },
-  {
-    slug: 'shurut_as_salah',
-    displayName: 'ሹሩጡ ሶላት',
-  },
-  {
-    slug: 'urjuzat',
-    displayName: 'ኡርጁዘቱል ሚኢያህ',
-  },
+  { slug: 'usul_al_thalatha', displayName: 'ኡሱሉ ሰላሳ' },
+  { slug: 'arbain', displayName: 'አርባኢን ነወዊ' },
+  { slug: 'shurut_as_salah', displayName: 'ሹሩጡ ሶላት' },
+  { slug: 'urjuzat', displayName: 'ኡርጁዘቱል ሚኢያህ' },
 ];
 
 /** Minimum percentage required to pass a course (matches backend). */
@@ -230,7 +218,9 @@ export default function DashboardPage() {
   const [certError, setCertError] = useState<string | null>(null);
   const [certSuccess, setCertSuccess] = useState<string | null>(null);
 
-  // ---------- Dark mode state & persistence (globally synced) ----------
+  // -------------------------------------------------------------------------
+  // Dark mode state & persistence (globally synced)
+  // -------------------------------------------------------------------------
   useEffect(() => {
     const stored = localStorage.getItem('basira-theme');
     let isDark = false;
@@ -263,26 +253,19 @@ export default function DashboardPage() {
     });
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // AUTH GUARD — RELIABLE SESSION CHECK via `supabase.auth.getUser()`
+  // -------------------------------------------------------------------------
+  // AUTH VERIFICATION — authoritative `getUser()` against Supabase Auth.
   //
-  // WHY WE SWITCHED AWAY FROM `INITIAL_SESSION`:
+  // Why `getUser()` and NOT the `INITIAL_SESSION` event:
   //   With `@supabase/ssr`'s `createBrowserClient`, the session lives in
-  //   cookies — not localStorage. The `INITIAL_SESSION` event can fire
-  //   BEFORE the browser client has finished reading those cookies, so it
-  //   briefly emits `null` and the guard kicks the user straight back to
-  //   /login. That is the "logged in but bounced back" symptom.
+  //   cookies. The `INITIAL_SESSION` event can fire before the browser
+  //   client finishes reading those cookies, momentarily emitting `null`
+  //   and causing a false bounce to /login. `getUser()` reads the cookies
+  //   directly and validates the JWT with Supabase Auth — no timing race.
   //
-  // STRATEGY:
-  //   1. Call `supabase.auth.getUser()` — this performs an authoritative,
-  //      server-validated read of the session from SSR cookies. It does not
-  //      depend on any client-side event timing.
-  //   2. Use `onAuthStateChange` ONLY as a listener for SIGNED_OUT — so if
-  //      the session expires or the user signs out in another tab, we
-  //      still clean up.
-  //   3. Keep a safety timeout so we never hang on the spinner forever if
-  //      the network stalls.
-  // ---------------------------------------------------------------------------
+  // `onAuthStateChange` is kept ONLY as a sign-out listener (multi-tab
+  // cleanup). It never determines the initial auth state.
+  // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
     let resolved = false;
@@ -309,7 +292,6 @@ export default function DashboardPage() {
       }
     };
 
-    // Primary source of truth: getUser() (validated against Supabase Auth).
     const checkUser = async () => {
       try {
         const {
@@ -343,13 +325,11 @@ export default function DashboardPage() {
       }
     }, 5000);
 
-    // Listener: strictly for sign-out. We do NOT rely on it for the initial
-    // auth determination, so event timing cannot cause a false bounce.
+    // Sign-out listener only.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
       if (cancelled) return;
-
       if (event === 'SIGNED_OUT') {
         router.replace('/login');
       }
@@ -483,9 +463,9 @@ export default function DashboardPage() {
     };
   }, [user?.id]);
 
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // LOGOUT — clears the Supabase session and hard-redirects to /login.
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
@@ -613,7 +593,8 @@ export default function DashboardPage() {
   );
 
   // -------------------------------------------------------------------------
-  // Loading state (auth)
+  // Loading state — shown while auth is being verified or user is unknown.
+  // Prevents any flash of unauthenticated UI or placeholder content.
   // -------------------------------------------------------------------------
   if (loading) {
     return (
@@ -623,7 +604,15 @@ export default function DashboardPage() {
     );
   }
 
-  const displayName = user?.full_name || user?.email || 'ተማሪ';
+  if (!user?.id) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-slate-900">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
+
+  const displayName = user.full_name || user.email || 'ተማሪ';
 
   // -------------------------------------------------------------------------
   // Render
@@ -835,7 +824,7 @@ export default function DashboardPage() {
 
             <div className="mt-6">
               <PaymentSection
-                userId={user?.id ?? ''}
+                userId={user.id}
                 onPaymentSubmitted={() => {
                   setPaymentStatus('pending');
                 }}
@@ -1258,7 +1247,7 @@ export default function DashboardPage() {
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
-              የቴሌግራም ቻናላችንን ይቀላለቁ
+              የቴሌግራም ቻናላችንን ይቀላቀሉ
             </h3>
           </div>
           <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
