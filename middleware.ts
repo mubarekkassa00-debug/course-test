@@ -8,7 +8,6 @@ export async function middleware(request: NextRequest) {
     },
   })
 
-  // 1. የ Supabase Client መፍጠር እና Session Refresh ማድረግ
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -30,7 +29,7 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // Session ማደሱን ማረጋገጥ (ከባድ Redirect logic ሳንጨምር)
+  // Refresh session if expired
   await supabase.auth.getUser()
 
   return response
@@ -39,8 +38,13 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Static ፋይሎችን እና ምስሎችን ትቶ በዋና ዋና ገጾች ላይ ብቻ እንዲሰራ
+     * Match all request paths except for:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - auth/callback (OAuth callback handler)
+     * - static image extensions (.svg, .png, .jpg, etc.)
      */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|auth/callback|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
