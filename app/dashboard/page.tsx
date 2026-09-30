@@ -5,7 +5,6 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import PaymentSection from '@/components/PaymentSection';
 import {
   BookOpen,
   Mic,
@@ -798,40 +797,6 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
-
-        {/* ============================================================ */}
-        {/* PAYMENT GATE                                                 */}
-        {/* ============================================================ */}
-        {!paymentLoading && !isPaymentApproved && (
-          <>
-            <div className="mt-6 rounded-2xl border-2 border-amber-300 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-white dark:from-amber-950/40 dark:to-slate-900 p-6 shadow-sm">
-              <div className="flex items-start gap-4">
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-100 dark:bg-amber-900/60">
-                  <Lock className="h-6 w-6 text-amber-700 dark:text-amber-300" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-amber-900 dark:text-amber-100 mb-1">
-                    ትምህርቱን ለመጀመር እባክዎ መጀመሪያ ክፍያ ይፈጽሙ።
-                  </h3>
-                  <p className="text-sm text-amber-800 dark:text-amber-200/90 leading-relaxed">
-                    የ4 ኪታቦች ትምህርት ለመክፈት እና የምስክር ወረቀትዎን ለማግኘት
-                    ክፍያውን ማጠናቀቅ ያስፈልጋል። ከታች ያለውን የክፍያ ቅጽ
-                    በመሙላት የደረሰኙን ምስል ይላኩ።
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <PaymentSection
-                userId={user.id}
-                onPaymentSubmitted={() => {
-                  setPaymentStatus('pending');
-                }}
-              />
-            </div>
-          </>
-        )}
 
         {/* ============================================================ */}
         {/* PRIMARY CARD 2 — COURSE PROGRESS                             */}
