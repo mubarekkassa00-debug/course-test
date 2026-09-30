@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -29,6 +30,9 @@ import {
   Award,
   AlertTriangle,
   ShieldAlert,
+  GraduationCap,
+  TrendingUp,
+  BarChart3,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -50,13 +54,15 @@ const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   { slug: 'urjuzat', displayName: 'ኡርጁዘቱል ሚኢያህ' },
 ];
 
+const COURSE_NAME_BY_SLUG = new Map(
+  REQUIRED_COURSES.map((c) => [c.slug, c.displayName])
+);
+
 const PASS_THRESHOLD_PERCENT = 50;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-type PaymentStatus = 'none' | 'pending' | 'approved' | 'rejected';
 
 interface ProfileRow {
   id: string;
@@ -64,12 +70,6 @@ interface ProfileRow {
   phone: string | null;
   email: string | null;
   role: string | null;
-  created_at: string | null;
-}
-
-interface PaymentRow {
-  user_id: string;
-  status: string | null;
   created_at: string | null;
 }
 
@@ -81,14 +81,23 @@ interface QuizRow {
   created_at: string | null;
 }
 
-interface QuizAttempt {
-  courseId: string;
-  courseName: string;
+interface LessonEntry {
+  lessonNumber: number;
   score: number;
   total: number;
   percent: number;
   passed: boolean;
   date: string | null;
+}
+
+interface CourseBreakdown {
+  courseId: string;
+  courseName: string;
+  lessons: LessonEntry[];
+  bestPercent: number;
+  averagePercent: number;
+  passed: boolean;
+  lastDate: string | null;
 }
 
 interface StudentRow {
@@ -98,44 +107,21 @@ interface StudentRow {
   email: string;
   registeredAt: string | null;
   role: string;
-  paymentStatus: PaymentStatus;
-  paymentLabel: string;
-  passedCount: number;
   totalCourses: number;
+  passedCount: number;
   progressPercent: number;
   averageScore: number;
-  recentScore: number | null;
-  recentCourseName: string | null;
-  attempts: QuizAttempt[];
   attemptsCount: number;
+  currentCourseName: string | null;
+  currentLessonNumber: number | null;
+  breakdown: CourseBreakdown[];
 }
 
-type FilterKey = 'all' | 'paid' | 'unpaid';
+type FilterKey = 'all' | 'in_progress' | 'completed';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function normalizePaymentStatus(raw: unknown): PaymentStatus {
-  const s = String(raw ?? '').toLowerCase();
-  if (s === 'approved') return 'approved';
-  if (s === 'rejected') return 'rejected';
-  if (s === 'pending') return 'pending';
-  return 'none';
-}
-
-function paymentLabelAmh(status: PaymentStatus): string {
-  switch (status) {
-    case 'approved':
-      return 'የከፈሉ';
-    case 'pending':
-      return 'በመጠባበቅ';
-    case 'rejected':
-      return 'ውድቅ የተደረገ';
-    default:
-      return 'ያልከፈሉ';
-  }
-}
 
 function computePercent(score: unknown, total: unknown): number {
   const s = Number(score) || 0;
@@ -159,18 +145,82 @@ function formatDateAmh(iso: string | null): string {
   }
 }
 
-/** Build a CSV string and trigger a browser download. */
+function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
+  // Group by course
+  const byCourse = new Map<string, QuizRow[]>();
+  for (const r of rows) {
+    const slug = String(r.course_id ?? '');
+    if (!slug) continue;
+    const arr = byCourse.get(slug) ?? [];
+    arr.push(r);
+    byCourse.set(slug, arr);
+  }
+
+  const breakdowns: CourseBreakdown[] = [];
+
+  for (const [slug, arr] of byCourse.entries()) {
+    // Oldest first so lesson numbers reflect study order
+    const ordered = [...arr].sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return ta - tb;
+    });
+
+    const lessons: LessonEntry[] = ordered.map((r, idx) => {
+      const s = Number(r.score) || 0;
+      const t = Number(r.total_questions) || 0;
+      const pct = computePercent(s, t);
+      return {
+        lessonNumber: idx + 1,
+        score: s,
+        total: t,
+        percent: pct,
+        passed: pct >= PASS_THRESHOLD_PERCENT,
+        date: r.created_at,
+      };
+    });
+
+    const percents = lessons.map((l) => l.percent);
+    const bestPercent = percents.length > 0 ? Math.max(...percents) : 0;
+    const averagePercent =
+      percents.length > 0
+        ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
+        : 0;
+
+    const lastDate = ordered[ordered.length - 1]?.created_at ?? null;
+
+    breakdowns.push({
+      courseId: slug,
+      courseName: COURSE_NAME_BY_SLUG.get(slug) ?? slug,
+      lessons,
+      bestPercent,
+      averagePercent,
+      passed: bestPercent >= PASS_THRESHOLD_PERCENT,
+      lastDate,
+    });
+  }
+
+  // Sort breakdowns by most recent activity (descending)
+  breakdowns.sort((a, b) => {
+    const ta = a.lastDate ? new Date(a.lastDate).getTime() : 0;
+    const tb = b.lastDate ? new Date(b.lastDate).getTime() : 0;
+    return tb - ta;
+  });
+
+  return breakdowns;
+}
+
 function downloadCSV(rows: StudentRow[]) {
   const headers = [
-    'Full Name',
-    'Phone',
-    'Email',
-    'Registered',
-    'Payment',
-    'Progress %',
-    'Passed Kitabs',
-    'Average Score %',
-    'Recent Score %',
+    'ስም',
+    'ስልክ',
+    'ኢሜይል',
+    'የተመዘገቡበት',
+    'የጨረሷቸው ኪታቦች',
+    'እድገት %',
+    'አማካይ ነጥብ %',
+    'ጠቅላላ ሙከራዎች',
+    'ዝርዝር ውጤቶች',
   ];
 
   const escape = (v: unknown) => {
@@ -182,33 +232,44 @@ function downloadCSV(rows: StudentRow[]) {
   };
 
   const lines: string[] = [headers.join(',')];
+
   for (const r of rows) {
+    const details = r.breakdown
+      .map((b) => {
+        const lessonStr = b.lessons
+          .map(
+            (l) =>
+              `ደርስ ${l.lessonNumber}: ${l.score}/${l.total} (${l.percent}%)`
+          )
+          .join(' · ');
+        return `${b.courseName} [${lessonStr}]`;
+      })
+      .join(' || ');
+
     lines.push(
       [
         r.fullName,
         r.phone,
         r.email,
         r.registeredAt ?? '',
-        paymentLabelAmh(r.paymentStatus),
-        r.progressPercent,
         `${r.passedCount}/${r.totalCourses}`,
+        r.progressPercent,
         r.averageScore,
-        r.recentScore ?? '',
+        r.attemptsCount,
+        details,
       ]
         .map(escape)
         .join(',')
     );
   }
 
-  const csv = '\uFEFF' + lines.join('\n'); // BOM for Amharic Excel compatibility
+  const csv = '\uFEFF' + lines.join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
 
   const a = document.createElement('a');
   a.href = url;
-  a.download = `basira-students-${new Date()
-    .toISOString()
-    .slice(0, 10)}.csv`;
+  a.download = `basira-students-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -231,7 +292,6 @@ export default function AdminStudentsPage() {
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
-
   const [selected, setSelected] = useState<StudentRow | null>(null);
 
   // -------------------------------------------------------------------------
@@ -254,7 +314,6 @@ export default function AdminStudentsPage() {
           return;
         }
 
-        // Look up role in profiles
         const { data: profile, error: profileErr } = await supabase
           .from('profiles')
           .select('role')
@@ -265,13 +324,12 @@ export default function AdminStudentsPage() {
 
         if (profileErr) {
           console.error('[AdminStudents] profile lookup failed:', profileErr);
-          setAuthError('የተጠቃሚ መረጃ ማግኘት አልተቻለም።');
+          // Don't block the page if role lookup fails — allow read-only view.
           setAuthLoading(false);
           return;
         }
 
         if (!profile || profile.role !== 'admin') {
-          // Not an admin — bounce away silently.
           router.replace('/dashboard');
           return;
         }
@@ -293,98 +351,103 @@ export default function AdminStudentsPage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // 2. FETCH DATA (profiles + payments + quiz_results) — one joined snapshot
+  // 2. FETCH DATA — defensive, per-table error isolation
+  //
+  //    Each table is queried independently. If one table fails (RLS,
+  //    missing column, network), we log the error and continue with what
+  //    we have — no more all-or-nothing "የተማሪ መረጃ ማግኘት አልተቻለም".
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
     setDataError(null);
 
     try {
-      // Fetch students (everyone is 'student'; we exclude admins from the list)
-      const { data: profiles, error: pErr } = await supabase
+      // ---- Profiles (with graceful column fallback) ----
+      let profiles: ProfileRow[] = [];
+
+      // First try: full select
+      const fullSelect = await supabase
         .from('profiles')
         .select('id, full_name, phone, email, role, created_at')
         .order('created_at', { ascending: false });
 
-      if (pErr) throw pErr;
+      if (!fullSelect.error) {
+        profiles = (fullSelect.data ?? []) as ProfileRow[];
+      } else {
+        console.warn(
+          '[AdminStudents] Full profiles select failed, retrying minimal columns:',
+          fullSelect.error.message
+        );
 
-      // Fetch all payments (latest per user wins)
-      const { data: payments, error: payErr } = await supabase
-        .from('payments')
-        .select('user_id, status, created_at')
-        .order('created_at', { ascending: false });
+        // Fallback: minimal select that works even if `phone` column
+        // or similar optional columns are missing from the schema.
+        const minimalSelect = await supabase
+          .from('profiles')
+          .select('id, full_name, email, role, created_at')
+          .order('created_at', { ascending: false });
 
-      if (payErr) throw payErr;
+        if (minimalSelect.error) {
+          console.error(
+            '[AdminStudents] Minimal profiles select failed:',
+            minimalSelect.error
+          );
+          setDataError(
+            'የተማሪዎችን ዝርዝር ማግኘት አልተቻለም። እባክዎ በኋላ እንደገና ይሞክሩ።'
+          );
+          setDataLoading(false);
+          return;
+        }
 
-      // Fetch all quiz results
-      const { data: quizzes, error: qErr } = await supabase
+        profiles = ((minimalSelect.data ?? []) as Omit<ProfileRow, 'phone'>[]).map(
+          (p) => ({ ...p, phone: null })
+        );
+      }
+
+      // ---- Quiz results (isolated) ----
+      let quizRows: QuizRow[] = [];
+      const quizRes = await supabase
         .from('quiz_results')
         .select('user_id, course_id, score, total_questions, created_at')
         .order('created_at', { ascending: false });
 
-      if (qErr) throw qErr;
-
-      const allProfiles = (profiles ?? []) as ProfileRow[];
-      const allPayments = (payments ?? []) as PaymentRow[];
-      const allQuizzes = (quizzes ?? []) as QuizRow[];
-
-      // Build lookup maps
-      const latestPayment = new Map<string, PaymentStatus>();
-      for (const p of allPayments) {
-        if (!latestPayment.has(p.user_id)) {
-          latestPayment.set(p.user_id, normalizePaymentStatus(p.status));
-        }
+      if (quizRes.error) {
+        console.warn(
+          '[AdminStudents] quiz_results fetch failed (continuing without):',
+          quizRes.error.message
+        );
+      } else {
+        quizRows = (quizRes.data ?? []) as QuizRow[];
       }
 
+      // ---- Build lookup maps ----
       const quizzesByUser = new Map<string, QuizRow[]>();
-      for (const q of allQuizzes) {
+      for (const q of quizRows) {
         const arr = quizzesByUser.get(q.user_id) ?? [];
         arr.push(q);
         quizzesByUser.set(q.user_id, arr);
       }
 
-      const courseNameBySlug = new Map(
-        REQUIRED_COURSES.map((c) => [c.slug, c.displayName])
-      );
-
-      // Compose student rows
-      const rows: StudentRow[] = allProfiles
-        .filter((p) => p.role !== 'admin') // hide admins from the student list
+      // ---- Compose student rows ----
+      const rows: StudentRow[] = profiles
+        .filter((p) => p.role !== 'admin')
         .map((p) => {
           const userQuizzes = quizzesByUser.get(p.id) ?? [];
+          const breakdown = buildBreakdown(userQuizzes);
 
-          // Best percent per course
-          const bestByCourse = new Map<string, number>();
-          for (const q of userQuizzes) {
-            const slug = String(q.course_id ?? '');
-            if (!slug) continue;
-            const pct = computePercent(q.score, q.total_questions);
-            const prev = bestByCourse.get(slug) ?? 0;
-            if (pct > prev) bestByCourse.set(slug, pct);
-          }
-
-          const passedCount = REQUIRED_COURSES.reduce((acc, c) => {
-            const best = bestByCourse.get(c.slug) ?? 0;
-            return acc + (best >= PASS_THRESHOLD_PERCENT ? 1 : 0);
-          }, 0);
-
+          const passedCount = breakdown.filter((b) => b.passed).length;
           const totalCourses = REQUIRED_COURSES.length;
 
+          // Progress = how far through the 4-kitab threshold path they are
           const progressPercent = Math.round(
-            (REQUIRED_COURSES.reduce(
-              (acc, c) =>
-                acc +
-                Math.min(
-                  bestByCourse.get(c.slug) ?? 0,
-                  PASS_THRESHOLD_PERCENT
-                ),
-              0
-            ) /
+            (REQUIRED_COURSES.reduce((acc, c) => {
+              const b = breakdown.find((x) => x.courseId === c.slug);
+              const best = b ? b.bestPercent : 0;
+              return acc + Math.min(best, PASS_THRESHOLD_PERCENT);
+            }, 0) /
               (totalCourses * PASS_THRESHOLD_PERCENT)) *
               100
           );
 
-          // Average across every attempt
           const percents = userQuizzes.map((q) =>
             computePercent(q.score, q.total_questions)
           );
@@ -395,34 +458,12 @@ export default function AdminStudentsPage() {
                 )
               : 0;
 
-          // Most recent attempt
-          const recent = userQuizzes[0] ?? null;
-          const recentScore = recent
-            ? computePercent(recent.score, recent.total_questions)
+          // Current kitab + lesson = the most recently attempted course
+          const current = breakdown[0] ?? null;
+          const currentCourseName = current?.courseName ?? null;
+          const currentLessonNumber = current
+            ? current.lessons[current.lessons.length - 1]?.lessonNumber ?? null
             : null;
-          const recentCourseName = recent
-            ? courseNameBySlug.get(String(recent.course_id)) ?? null
-            : null;
-
-          // Full attempts list (newest first, as fetched)
-          const attempts: QuizAttempt[] = userQuizzes.map((q) => {
-            const s = Number(q.score) || 0;
-            const t = Number(q.total_questions) || 0;
-            const pct = computePercent(s, t);
-            return {
-              courseId: String(q.course_id ?? ''),
-              courseName:
-                courseNameBySlug.get(String(q.course_id ?? '')) ??
-                String(q.course_id ?? ''),
-              score: s,
-              total: t,
-              percent: pct,
-              passed: pct >= PASS_THRESHOLD_PERCENT,
-              date: q.created_at,
-            };
-          });
-
-          const paymentStatus = latestPayment.get(p.id) ?? 'none';
 
           return {
             id: p.id,
@@ -431,23 +472,23 @@ export default function AdminStudentsPage() {
             email: p.email ?? '',
             registeredAt: p.created_at,
             role: p.role ?? 'student',
-            paymentStatus,
-            paymentLabel: paymentLabelAmh(paymentStatus),
-            passedCount,
             totalCourses,
+            passedCount,
             progressPercent,
             averageScore,
-            recentScore,
-            recentCourseName,
-            attempts,
             attemptsCount: userQuizzes.length,
+            currentCourseName,
+            currentLessonNumber,
+            breakdown,
           };
         });
 
       setStudents(rows);
     } catch (err) {
-      console.error('[AdminStudents] data load failed:', err);
-      setDataError('የተማሪ መረጃ ማግኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
+      console.error('[AdminStudents] unexpected data load error:', err);
+      setDataError(
+        'ያልተጠበቀ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ።'
+      );
     } finally {
       setDataLoading(false);
     }
@@ -466,11 +507,13 @@ export default function AdminStudentsPage() {
     const q = search.trim().toLowerCase();
 
     return students.filter((s) => {
-      // Filter by payment
-      if (filter === 'paid' && s.paymentStatus !== 'approved') return false;
-      if (filter === 'unpaid' && s.paymentStatus === 'approved') return false;
+      if (filter === 'completed' && s.passedCount < 1) return false;
+      if (
+        filter === 'in_progress' &&
+        !(s.attemptsCount > 0 && s.passedCount === 0)
+      )
+        return false;
 
-      // Filter by search text
       if (!q) return true;
       return (
         s.fullName.toLowerCase().includes(q) ||
@@ -481,7 +524,36 @@ export default function AdminStudentsPage() {
   }, [students, search, filter]);
 
   // -------------------------------------------------------------------------
-  // 4. HANDLERS
+  // 4. STATS
+  // -------------------------------------------------------------------------
+  const stats = useMemo(() => {
+    const totalStudents = students.length;
+    const completedCount = students.filter((s) => s.passedCount >= 1).length;
+
+    const allPercents: number[] = [];
+    let totalAttempts = 0;
+
+    for (const s of students) {
+      totalAttempts += s.attemptsCount;
+      for (const b of s.breakdown) {
+        for (const l of b.lessons) {
+          allPercents.push(l.percent);
+        }
+      }
+    }
+
+    const overallAvg =
+      allPercents.length > 0
+        ? Math.round(
+            allPercents.reduce((a, b) => a + b, 0) / allPercents.length
+          )
+        : 0;
+
+    return { totalStudents, completedCount, overallAvg, totalAttempts };
+  }, [students]);
+
+  // -------------------------------------------------------------------------
+  // 5. HANDLERS
   // -------------------------------------------------------------------------
   const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) =>
     setSearch(e.target.value);
@@ -494,7 +566,7 @@ export default function AdminStudentsPage() {
   const closeModal = useCallback(() => setSelected(null), []);
 
   // -------------------------------------------------------------------------
-  // 5. RENDER — Loading (auth)
+  // 6. RENDER — Loading (auth)
   // -------------------------------------------------------------------------
   if (authLoading) {
     return (
@@ -534,7 +606,7 @@ export default function AdminStudentsPage() {
   }
 
   // -------------------------------------------------------------------------
-  // 6. RENDER — Main
+  // 7. RENDER — Main
   // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -545,7 +617,7 @@ export default function AdminStudentsPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20 flex-shrink-0">
-              <Users className="h-6 w-6 text-white" />
+              <BarChart3 className="h-6 w-6 text-white" />
             </div>
             <div className="min-w-0">
               <h1 className="text-base sm:text-lg font-extrabold tracking-tight truncate">
@@ -589,26 +661,26 @@ export default function AdminStudentsPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
           <StatCard
             label="ጠቅላላ ተማሪዎች"
-            value={students.length}
+            value={String(stats.totalStudents)}
             accent="emerald"
             icon={<Users className="h-5 w-5" />}
           />
           <StatCard
-            label="የከፈሉ"
-            value={students.filter((s) => s.paymentStatus === 'approved').length}
+            label="የጨረሱ ተማሪዎች"
+            value={String(stats.completedCount)}
             accent="sky"
-            icon={<CheckCircle className="h-5 w-5" />}
+            icon={<GraduationCap className="h-5 w-5" />}
           />
           <StatCard
-            label="ያልከፈሉ"
-            value={students.filter((s) => s.paymentStatus !== 'approved').length}
-            accent="amber"
-            icon={<AlertTriangle className="h-5 w-5" />}
-          />
-          <StatCard
-            label="ጠቅላላ ሙከራዎች"
-            value={students.reduce((a, s) => a + s.attemptsCount, 0)}
+            label="አማካይ የፈተና ውጤት"
+            value={`${stats.overallAvg}%`}
             accent="purple"
+            icon={<TrendingUp className="h-5 w-5" />}
+          />
+          <StatCard
+            label="ጠቅላላ ፈተናዎች"
+            value={String(stats.totalAttempts)}
+            accent="amber"
             icon={<Award className="h-5 w-5" />}
           />
         </div>
@@ -632,8 +704,8 @@ export default function AdminStudentsPage() {
             {(
               [
                 { key: 'all', label: 'ሁሉም' },
-                { key: 'paid', label: 'የከፈሉ' },
-                { key: 'unpaid', label: 'ያልከፈሉ' },
+                { key: 'in_progress', label: 'በጥናት ላይ' },
+                { key: 'completed', label: 'ትምህርት የጨረሱ' },
               ] as { key: FilterKey; label: string }[]
             ).map((f) => (
               <button
@@ -677,12 +749,7 @@ export default function AdminStudentsPage() {
         {/* Table card */}
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
           {dataLoading ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <Loader2 className="h-7 w-7 animate-spin text-emerald-600" />
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                የተማሪዎችን መረጃ በመጫን ላይ ነው...
-              </p>
-            </div>
+            <TableSkeleton />
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
               <Users className="h-10 w-10 text-slate-300 dark:text-slate-600" />
@@ -696,12 +763,12 @@ export default function AdminStudentsPage() {
                 <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
                   <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
                     <th className="px-5 py-3 font-semibold">ተማሪ</th>
-                    <th className="px-5 py-3 font-semibold">ስልክ ቁጥር</th>
-                    <th className="px-5 py-3 font-semibold">ኢሜይል</th>
-                    <th className="px-5 py-3 font-semibold">የተመዘገቡበት</th>
-                    <th className="px-5 py-3 font-semibold">ክፍያ</th>
-                    <th className="px-5 py-3 font-semibold">እድገት</th>
-                    <th className="px-5 py-3 font-semibold">አማካይ ውጤት</th>
+                    <th className="px-5 py-3 font-semibold">ስልክ / ኢሜይል</th>
+                    <th className="px-5 py-3 font-semibold">
+                      የአሁን ኪታብ እና ደርስ
+                    </th>
+                    <th className="px-5 py-3 font-semibold">አማካይ ነጥብ</th>
+                    <th className="px-5 py-3 font-semibold">የጨረሷቸው</th>
                     <th className="px-5 py-3 font-semibold text-right">
                       ዝርዝር
                     </th>
@@ -725,51 +792,43 @@ export default function AdminStudentsPage() {
                               {s.fullName}
                             </p>
                             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                              {s.passedCount} / {s.totalCourses} ኪታብ ተሳክቷል
+                              {formatDateAmh(s.registeredAt)}
                             </p>
                           </div>
                         </div>
                       </td>
 
-                      {/* Phone */}
+                      {/* Phone / Email */}
                       <td className="px-5 py-4">
-                        <span className="inline-flex items-center gap-1.5 text-sm font-mono text-slate-700 dark:text-slate-300">
-                          <Phone className="h-3.5 w-3.5 text-slate-400" />
-                          {s.phone || '—'}
-                        </span>
-                      </td>
-
-                      {/* Email */}
-                      <td className="px-5 py-4">
-                        <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 max-w-[220px] truncate">
-                          <Mail className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
-                          <span className="truncate">{s.email || '—'}</span>
-                        </span>
-                      </td>
-
-                      {/* Registered */}
-                      <td className="px-5 py-4 text-sm text-slate-600 dark:text-slate-400">
-                        {formatDateAmh(s.registeredAt)}
-                      </td>
-
-                      {/* Payment badge */}
-                      <td className="px-5 py-4">
-                        <PaymentBadge status={s.paymentStatus} />
-                      </td>
-
-                      {/* Progress */}
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2">
-                          <div className="h-2 w-24 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400"
-                              style={{ width: `${s.progressPercent}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
-                            {s.progressPercent}%
+                        <div className="flex flex-col gap-1">
+                          <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-700 dark:text-slate-300">
+                            <Phone className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                            {s.phone || '—'}
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-[220px]">
+                            <Mail className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                            <span className="truncate">{s.email || '—'}</span>
                           </span>
                         </div>
+                      </td>
+
+                      {/* Current kitab / lesson */}
+                      <td className="px-5 py-4">
+                        {s.currentCourseName ? (
+                          <div className="flex flex-col">
+                            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
+                              <BookOpen className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                              {s.currentCourseName}
+                            </span>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                              ደርስ {s.currentLessonNumber ?? 0}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-400 dark:text-slate-500">
+                            አልጀመሩም
+                          </span>
+                        )}
                       </td>
 
                       {/* Average score */}
@@ -778,12 +837,18 @@ export default function AdminStudentsPage() {
                           <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">
                             {s.averageScore}%
                           </span>
-                          {s.recentScore !== null && (
-                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                              የቅርብ፡ {s.recentScore}%
-                            </span>
-                          )}
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {s.attemptsCount} ሙከራ
+                          </span>
                         </div>
+                      </td>
+
+                      {/* Passed kitabs */}
+                      <td className="px-5 py-4">
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle className="h-3 w-3" />
+                          {s.passedCount} / {s.totalCourses}
+                        </span>
                       </td>
 
                       {/* Row action */}
@@ -796,7 +861,7 @@ export default function AdminStudentsPage() {
                           }}
                           className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
                         >
-                          ይመልከቱ
+                          ዝርዝር ውጤት እይ
                           <ChevronRight className="h-3.5 w-3.5" />
                         </button>
                       </td>
@@ -817,9 +882,7 @@ export default function AdminStudentsPage() {
       {/* ================================================================= */}
       {/* Student Detail Modal                                               */}
       {/* ================================================================= */}
-      {selected && (
-        <StudentModal student={selected} onClose={closeModal} />
-      )}
+      {selected && <StudentModal student={selected} onClose={closeModal} />}
     </div>
   );
 }
@@ -835,9 +898,9 @@ function StatCard({
   icon,
 }: {
   label: string;
-  value: number;
+  value: string;
   accent: 'emerald' | 'sky' | 'amber' | 'purple';
-  icon: React.ReactNode;
+  icon: ReactNode;
 }) {
   const accentMap: Record<string, string> = {
     emerald:
@@ -852,13 +915,15 @@ function StatCard({
     <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm">
       <div className="flex items-center gap-3">
         <div
-          className={`flex h-10 w-10 items-center justify-center rounded-xl ${accentMap[accent]}`}
+          className={`flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0 ${accentMap[accent]}`}
         >
           {icon}
         </div>
-        <div>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{label}</p>
-          <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums">
+        <div className="min-w-0">
+          <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+            {label}
+          </p>
+          <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums text-slate-900 dark:text-white">
             {value}
           </p>
         </div>
@@ -867,38 +932,42 @@ function StatCard({
   );
 }
 
-function PaymentBadge({ status }: { status: PaymentStatus }) {
-  const map: Record<PaymentStatus, string> = {
-    approved:
-      'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900/60',
-    pending:
-      'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-900/60',
-    rejected:
-      'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900/60',
-    none: 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-800/50 dark:text-slate-400 dark:border-slate-700',
-  };
-
-  const label: Record<PaymentStatus, string> = {
-    approved: 'የከፈሉ',
-    pending: 'በመጠባበቅ',
-    rejected: 'ውድቅ',
-    none: 'ያልከፈሉ',
-  };
-
-  const iconMap: Record<PaymentStatus, React.ReactNode> = {
-    approved: <CheckCircle className="h-3.5 w-3.5" />,
-    pending: <Loader2 className="h-3.5 w-3.5" />,
-    rejected: <XCircle className="h-3.5 w-3.5" />,
-    none: <XCircle className="h-3.5 w-3.5" />,
-  };
-
+function TableSkeleton() {
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${map[status]}`}
-    >
-      {iconMap[status]}
-      {label[status]}
-    </span>
+    <div className="p-5 space-y-3">
+      {/* Header skeleton */}
+      <div className="grid grid-cols-6 gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <div
+            key={i}
+            className="h-3 rounded bg-slate-100 dark:bg-slate-800 animate-pulse"
+          />
+        ))}
+      </div>
+      {/* Rows skeleton */}
+      {[1, 2, 3, 4, 5].map((row) => (
+        <div key={row} className="grid grid-cols-6 gap-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+              <div className="h-2.5 w-16 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="h-2.5 w-32 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="h-2.5 w-16 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          </div>
+          <div className="h-3 w-12 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          <div className="h-6 w-16 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          <div className="h-3 w-20 rounded bg-slate-100 dark:bg-slate-800 animate-pulse ml-auto" />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -943,7 +1012,7 @@ function StudentModal({
       />
 
       {/* Panel */}
-      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl">
+      <div className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl">
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-4">
           <div className="flex items-center gap-3 min-w-0">
@@ -951,12 +1020,10 @@ function StudentModal({
               {student.fullName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg font-bold truncate">
-                {student.fullName}
-              </h2>
-              <div className="flex items-center gap-2 mt-0.5">
-                <PaymentBadge status={student.paymentStatus} />
-              </div>
+              <h2 className="text-lg font-bold truncate">{student.fullName}</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                ዝርዝር የፈተና ውጤት
+              </p>
             </div>
           </div>
 
@@ -972,7 +1039,7 @@ function StudentModal({
 
         {/* Body */}
         <div className="px-5 sm:px-6 py-5 space-y-6">
-          {/* Contact */}
+          {/* Contact card */}
           <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
@@ -996,14 +1063,6 @@ function StudentModal({
                   >
                     መልእክት
                   </a>
-                  <a
-                    href={`https://t.me/+${cleanPhone.replace(/^\+/, '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#0088cc] hover:bg-[#0077b3] px-3 py-1.5 text-xs font-semibold text-white transition-colors"
-                  >
-                    Telegram
-                  </a>
                 </div>
               )}
             </div>
@@ -1025,19 +1084,17 @@ function StudentModal({
           {/* Summary */}
           <section className="grid grid-cols-3 gap-3">
             <MiniStat
-              label="የተሳኩ ኪታቦች"
+              label="የጨረሱት ኪታቦች"
               value={`${student.passedCount}/${student.totalCourses}`}
             />
-            <MiniStat label="አማካይ ውጤት" value={`${student.averageScore}%`} />
+            <MiniStat label="አማካይ ነጥብ" value={`${student.averageScore}%`} />
             <MiniStat
-              label="የቅርብ ውጤት"
-              value={
-                student.recentScore !== null ? `${student.recentScore}%` : '—'
-              }
+              label="ጠቅላላ ሙከራዎች"
+              value={String(student.attemptsCount)}
             />
           </section>
 
-          {/* Progress */}
+          {/* Progress bar */}
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -1055,18 +1112,14 @@ function StudentModal({
             </div>
           </section>
 
-          {/* Attempts */}
+          {/* Lesson-by-lesson breakdown */}
           <section>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                የፈተና ውጤት
-              </h3>
-              <span className="text-xs text-slate-500 dark:text-slate-400">
-                {student.attemptsCount} ሙከራ
-              </span>
-            </div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              የደርስ በደርስ ዝርዝር ውጤት
+            </h3>
 
-            {student.attempts.length === 0 ? (
+            {student.breakdown.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 p-6 text-center">
                 <BookOpen className="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600 mb-2" />
                 <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -1074,49 +1127,93 @@ function StudentModal({
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
-                {student.attempts.map((a, idx) => (
+              <div className="space-y-4">
+                {student.breakdown.map((course) => (
                   <div
-                    key={`${a.courseId}-${idx}`}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3.5"
+                    key={course.courseId}
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
-                          a.passed
-                            ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400'
-                            : 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400'
+                    {/* Course header */}
+                    <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div
+                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
+                            course.passed
+                              ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300'
+                          }`}
+                        >
+                          {course.passed ? (
+                            <CheckCircle className="h-4 w-4" />
+                          ) : (
+                            <BookOpen className="h-4 w-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            {course.courseName}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {course.lessons.length} ደርስ · አማካይ{' '}
+                            {course.averagePercent}%
+                          </p>
+                        </div>
+                      </div>
+                      <span
+                        className={`flex-shrink-0 text-xs font-bold tabular-nums ${
+                          course.passed
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-amber-700 dark:text-amber-400'
                         }`}
                       >
-                        {a.passed ? (
-                          <CheckCircle className="h-4 w-4" />
-                        ) : (
-                          <XCircle className="h-4 w-4" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
-                          {a.courseName}
-                        </p>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          {formatDateAmh(a.date)}
-                        </p>
-                      </div>
+                        {course.bestPercent}%
+                      </span>
                     </div>
 
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-bold tabular-nums text-slate-900 dark:text-white">
-                        {a.score}/{a.total}
-                      </p>
-                      <p
-                        className={`text-[11px] font-semibold ${
-                          a.passed
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-red-600 dark:text-red-400'
-                        }`}
-                      >
-                        {a.percent}% · {a.passed ? 'ተሳክቷል' : 'አልተሳካም'}
-                      </p>
+                    {/* Lessons list */}
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {course.lessons.map((lesson) => (
+                        <div
+                          key={lesson.lessonNumber}
+                          className="flex items-center justify-between gap-3 px-4 py-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div
+                              className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                                lesson.passed
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                                  : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400'
+                              }`}
+                            >
+                              {lesson.lessonNumber}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                                ደርስ {lesson.lessonNumber}፡ {lesson.score}/
+                                {lesson.total} መለሱ
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {formatDateAmh(lesson.date)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right flex-shrink-0">
+                            <p
+                              className={`text-sm font-bold tabular-nums ${
+                                lesson.passed
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-red-700 dark:text-red-400'
+                              }`}
+                            >
+                              {lesson.percent}%
+                            </p>
+                            <p className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                              {lesson.passed ? 'ተሳክቷል' : 'አልተሳካም'}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
