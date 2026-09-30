@@ -1,7 +1,7 @@
 // app/login/page.tsx
 'use client';
 
-import { useState, useCallback, FormEvent, useMemo } from 'react';
+import { useState, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import {
@@ -170,30 +170,66 @@ export default function LoginPage() {
   //   This is the correct, secure pattern for Next.js App Router — cookies
   //   are set on the server, so `middleware.ts` and Server Components see
   //   the session immediately on the next request.
+  //
+  // NOTE: `flowType` is NOT a valid key inside `options` for
+  //   `signInWithOAuth` — it belongs on the client constructor. Since
+  //   `createBrowserClient` from `@supabase/ssr` already uses PKCE by
+  //   default, we don't need to set it here at all.
   // ---------------------------------------------------------------------------
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
     setErrorMessage(null);
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-
-      if (error) {
-        setErrorMessage(error.message);
+      // Defensive: this component is 'use client' so window always exists,
+      // but we guard anyway to be safe against edge-cases (SSR, tests).
+      if (typeof window === 'undefined') {
+        setErrorMessage('የአሳሽ አካባቢ አልተገኘም።');
         setGoogleLoading(false);
         return;
       }
 
-      // On success, Supabase redirects the browser to Google's consent
-      // screen — no further client-side action is needed here.
+      // Build the callback URL dynamically from the current origin.
+      //   → http://localhost:3000/auth/callback  (development)
+      //   → https://basira.vercel.app/auth/callback  (preview)
+      //   → https://basira.et/auth/callback  (production)
+      const callbackUrl = `${window.location.origin}/auth/callback`;
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: callbackUrl,
+          // Google-specific: request offline access so a refresh_token is
+          // issued, and force the consent screen so the refresh_token is
+          // returned every time (not only on the very first sign-in).
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
+        },
+      });
+
+      if (error) {
+        console.error('[Login] Google OAuth error:', error);
+        setErrorMessage(
+          error.message ||
+            'በ Google መግባት አልተቻለም። እባክዎ እንደገና ይሞክሩ።'
+        );
+        setGoogleLoading(false);
+        return;
+      }
+
+      // Supabase returns the fully-qualified Google consent URL in
+      // `data.url`. In the browser flow with `skipBrowserRedirect: false`
+      // (the default), the SDK automatically redirects the browser there —
+      // so no manual navigation is needed.
+      //
+      // We keep `googleLoading` true on purpose: the browser is about to
+      // navigate away, and leaving the button in the spinner state prevents
+      // a confusing flash of "continue with Google" before the redirect.
     } catch (err) {
+      console.error('[Login] Google OAuth exception:', err);
       setErrorMessage('በ Google መግባት አልተቻለም። እባክዎ እንደገና ይሞክሩ።');
-      console.error('Google login error:', err);
       setGoogleLoading(false);
     }
   };
