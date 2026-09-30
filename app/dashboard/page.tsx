@@ -26,6 +26,9 @@ import {
   Download,
   AlertTriangle,
   Send,
+  Menu,
+  X,
+  CreditCard,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -212,6 +215,9 @@ export default function DashboardPage() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [hijriDate, setHijriDate] = useState('');
+
+  // NEW: mobile hamburger menu open/close state
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Progress + payment state
   const [courseProgress, setCourseProgress] = useState<CourseProgress[]>([]);
@@ -658,6 +664,20 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* NEW: Mobile hamburger button */}
+            <button
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              className="md:hidden relative p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileMenuOpen}
+            >
+              {mobileMenuOpen ? (
+                <X className="h-5 w-5" />
+              ) : (
+                <Menu className="h-5 w-5" />
+              )}
+            </button>
+
             <button
               onClick={toggleDarkMode}
               className="relative p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -691,12 +711,80 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+
+        {/* NEW: Mobile dropdown navigation panel */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-slate-200/60 dark:border-slate-800/60 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl">
+            <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+              <Link
+                href="/dashboard/payment"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/60">
+                  <CreditCard className="h-4 w-4 text-emerald-700 dark:text-emerald-300" />
+                </span>
+                <span>የክፍያ ሁኔታ</span>
+              </Link>
+            </nav>
+          </div>
+        )}
       </header>
 
       {/* ================================================================= */}
       {/* Main Content                                                       */}
       {/* ================================================================= */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-5 sm:mt-6 pb-12">
+        {/* ============================================================ */}
+        {/* DYNAMIC PAYMENT STATUS BANNER                                 */}
+        {/* ============================================================ */}
+        {!paymentLoading && paymentStatus === 'none' && (
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-amber-300 dark:border-amber-800 bg-gradient-to-r from-amber-50 to-amber-100/60 dark:from-amber-950/40 dark:to-amber-900/20 p-4 sm:p-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/60">
+                  <AlertTriangle className="h-5 w-5 text-amber-700 dark:text-amber-300" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm sm:text-base font-bold text-amber-900 dark:text-amber-100">
+                    ትምህርቶችን ሙሉ በሙሉ ለመክፈት ክፍያ ይፈጽሙ
+                  </p>
+                  <p className="mt-0.5 text-xs sm:text-sm text-amber-800/90 dark:text-amber-200/80 leading-relaxed">
+                    ክፍያዎን አጠናቀው ሁሉንም ትምህርቶች፣ ዲጂታል ቤተ-መጽሐፍት እና
+                    ሰርቲፊኬት ይክፈቱ።
+                  </p>
+                </div>
+              </div>
+
+              <Link
+                href="/dashboard/payment"
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-amber-900/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 flex-shrink-0"
+              >
+                አሁኑኑ ይክፈሉ
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {!paymentLoading && paymentStatus === 'pending' && (
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-sky-300 dark:border-sky-800 bg-gradient-to-r from-sky-50 to-sky-100/60 dark:from-sky-950/40 dark:to-sky-900/20 p-4 sm:p-5 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-sky-100 dark:bg-sky-900/60">
+                <Clock className="h-5 w-5 text-sky-700 dark:text-sky-300" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm sm:text-base font-bold text-sky-900 dark:text-sky-100">
+                  ⏳ የላኩት ደረሰኝ በመመርመር ላይ ነው!
+                </p>
+                <p className="mt-0.5 text-xs sm:text-sm text-sky-800/90 dark:text-sky-200/80 leading-relaxed">
+                  አድሚኑ እንደሚያረጋግጥልዎ ሙሉ ትምህርቶቹ ይከፈታሉ። እባክዎ በትዕግስት
+                  ይጠብቁ።
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ============================================================ */}
         {/* PRIMARY CARD 1 — COMPACT HERO / WELCOME BANNER               */}
         {/* ============================================================ */}
