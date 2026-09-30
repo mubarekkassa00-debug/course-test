@@ -216,7 +216,7 @@ export default function DashboardPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [hijriDate, setHijriDate] = useState('');
 
-  // NEW: mobile hamburger menu open/close state
+  // Mobile hamburger menu open/close state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Progress + payment state
@@ -264,31 +264,24 @@ export default function DashboardPage() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // AUTH GUARD — RESILIENT SESSION CHECK via `onAuthStateChange`
+  // AUTH GUARD — RELIABLE SESSION CHECK via `supabase.auth.getUser()`
   //
-  // PROBLEM WE ARE SOLVING:
-  //   When the user navigates /courses → /dashboard (or hard-refreshes), the
-  //   Supabase client needs a brief moment to hydrate its session state from
-  //   localStorage / cookies. A one-shot `getSession()` call races against
-  //   that hydration, so on the very first tick it can return `null` and the
-  //   guard bounces the user back to `/login`.
+  // WHY WE SWITCHED AWAY FROM `INITIAL_SESSION`:
+  //   With `@supabase/ssr`'s `createBrowserClient`, the session lives in
+  //   cookies — not localStorage. The `INITIAL_SESSION` event can fire
+  //   BEFORE the browser client has finished reading those cookies, so it
+  //   briefly emits `null` and the guard kicks the user straight back to
+  //   /login. That is the "logged in but bounced back" symptom.
   //
   // STRATEGY:
-  //   Subscribe to `supabase.auth.onAuthStateChange` FIRST — before any
-  //   navigation happens. Supabase fires the `INITIAL_SESSION` event exactly
-  //   once, AFTER its own hydration is finished, carrying either the current
-  //   session or `null`. That is our single source of truth:
-  //
-  //     • INITIAL_SESSION with a user → populate `user`, stop loading.
-  //     • INITIAL_SESSION with null   → no session exists → go to /login.
-  //     • SIGNED_IN / TOKEN_REFRESHED → keep `user` in sync with the SDK.
-  //     • SIGNED_OUT                  → go to /login.
-  //
-  //   A 5-second safety timeout guarantees we never get stuck on the loading
-  //   spinner if the SDK fails to emit `INITIAL_SESSION` for any reason.
-  //
-  //   The `resolved` flag ensures we only act on the very first authoritative
-  //   signal, and the `cancelled` flag prevents state updates after unmount.
+  //   1. Call `supabase.auth.getUser()` — this performs an authoritative,
+  //      server-validated read of the session from SSR cookies. It does not
+  //      depend on any client-side event timing.
+  //   2. Use `onAuthStateChange` ONLY as a listener for SIGNED_OUT — so if
+  //      the session expires or the user signs out in another tab, we
+  //      still clean up.
+  //   3. Keep a safety timeout so we never hang on the spinner forever if
+  //      the network stalls.
   // ---------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -316,7 +309,33 @@ export default function DashboardPage() {
       }
     };
 
-    // Safety net — if `INITIAL_SESSION` never fires, don't hang forever.
+    // Primary source of truth: getUser() (validated against Supabase Auth).
+    const checkUser = async () => {
+      try {
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (error || !user) {
+          finalize(false);
+          return;
+        }
+
+        finalize(true, user);
+      } catch (err) {
+        if (!cancelled) {
+          console.error('[Dashboard] getUser failed:', err);
+          finalize(false);
+        }
+      }
+    };
+
+    checkUser();
+
+    // Safety net — if nothing resolves within 5 seconds, bail out.
     safetyTimeout = setTimeout(() => {
       if (!cancelled && !resolved) {
         resolved = true;
@@ -324,34 +343,12 @@ export default function DashboardPage() {
       }
     }, 5000);
 
-    // Subscribe FIRST so we never miss the `INITIAL_SESSION` event.
+    // Listener: strictly for sign-out. We do NOT rely on it for the initial
+    // auth determination, so event timing cannot cause a false bounce.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = supabase.auth.onAuthStateChange((event) => {
       if (cancelled) return;
-
-      if (event === 'INITIAL_SESSION') {
-        // Authoritative hydration signal — act on it exactly once.
-        if (session?.user) {
-          finalize(true, session.user);
-        } else {
-          finalize(false);
-        }
-        return;
-      }
-
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        // Keep the user in sync with the SDK for the lifetime of the page.
-        if (session?.user) {
-          setUser({
-            id: session.user.id,
-            email: session.user.email,
-            full_name: session.user.user_metadata?.full_name,
-          });
-          setLoading(false);
-        }
-        return;
-      }
 
       if (event === 'SIGNED_OUT') {
         router.replace('/login');
@@ -488,11 +485,6 @@ export default function DashboardPage() {
 
   // ---------------------------------------------------------------------------
   // LOGOUT — clears the Supabase session and hard-redirects to /login.
-  //
-  // `window.location.href` (a full page reload) is used so the cleared
-  // session cookies are guaranteed to propagate before the next request
-  // hits the server, mirroring the login flow's hard-redirect strategy.
-  // The middleware then sees no session and keeps the user on /login.
   // ---------------------------------------------------------------------------
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -664,7 +656,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* NEW: Mobile hamburger button */}
+            {/* Mobile hamburger button */}
             <button
               onClick={() => setMobileMenuOpen((prev) => !prev)}
               className="md:hidden relative p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -712,7 +704,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* NEW: Mobile dropdown navigation panel */}
+        {/* Mobile dropdown navigation panel */}
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-slate-200/60 dark:border-slate-800/60 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl">
             <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
@@ -789,7 +781,6 @@ export default function DashboardPage() {
         {/* PRIMARY CARD 1 — COMPACT HERO / WELCOME BANNER               */}
         {/* ============================================================ */}
         <div className="relative rounded-2xl overflow-hidden shadow-lg shadow-emerald-950/10 ring-1 ring-emerald-100/60 dark:ring-emerald-900/40">
-          {/* Background image + layered overlays */}
           <div className="absolute inset-0">
             <img
               src={HERO_IMAGE_URL}
@@ -797,16 +788,12 @@ export default function DashboardPage() {
               aria-hidden="true"
               className="h-full w-full object-cover scale-105"
             />
-            {/* Emerald tint + darkness gradient for legibility */}
             <div className="absolute inset-0 bg-gradient-to-tr from-emerald-950/85 via-emerald-900/70 to-slate-950/80" />
-            {/* Subtle decorative glow orbs */}
             <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-amber-400/20 blur-3xl" />
             <div className="absolute -bottom-20 -left-20 h-40 w-40 rounded-full bg-emerald-400/20 blur-3xl" />
           </div>
 
-          {/* Compact content */}
           <div className="relative px-5 sm:px-7 py-6 sm:py-7 flex flex-col gap-3">
-            {/* Date badge (glassmorphism) — compact */}
             <div className="self-start inline-flex items-center gap-2 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5">
               <Calendar className="h-4 w-4 text-amber-300" />
               <span className="text-xs font-medium text-white/95 tracking-wide">
@@ -814,7 +801,6 @@ export default function DashboardPage() {
               </span>
             </div>
 
-            {/* Greeting — compact */}
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight drop-shadow-sm">
                 እንኳን ደህና መጡ፣ {displayName}!
@@ -965,7 +951,6 @@ export default function DashboardPage() {
                       )}
                     </div>
 
-                    {/* Thin animated progress bar */}
                     <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
                       <div
                         className={`h-full rounded-full transition-all duration-700 ease-out ${barColor}`}
@@ -1259,12 +1244,6 @@ export default function DashboardPage() {
         {/* ============================================================ */}
         {/* FOOTER — COMPACT TELEGRAM BANNER                             */}
         {/* ============================================================ */}
-        {/*
-          TODO: Replace the `href="https://t.me/Basira_on"` below with your real Telegram channel link.
-          Example:
-            href="https://t.me/Basira"
-            href="Basira_on"
-        */}
         <a
           href="https://t.me/Basira_on"
           target="_blank"
@@ -1279,7 +1258,7 @@ export default function DashboardPage() {
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
-              የቴሌግራም ቻናላችንን ይቀላቀሉ
+              የቴሌግራም ቻናላችንን ይቀላለቁ
             </h3>
           </div>
           <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
