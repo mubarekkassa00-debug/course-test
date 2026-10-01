@@ -3,24 +3,30 @@
 // Server-side eligibility check + PDF certificate generator.
 //
 // Flow:
-//   1. Read `userId` from the JSON request body.
-//   2. Resolve the student's display name using this strict priority:
+//   1. Authenticate the caller from request cookies via Supabase SSR.
+//   2. Verify the caller's identity matches the `userId` in the body
+//      (prevents one student from generating another student's certificate).
+//   3. Enforce the three-part eligibility rule:
+//        a) All active lessons completed (unique lesson attempts in `quiz_results`).
+//        b) Final comprehensive exam completed (`is_final_exam = true`).
+//        c) Combined score across lessons + final exam >= 50%.
+//   4. Resolve the student's display name using this strict priority:
 //        a) profiles.full_name
-//        b) user_metadata.full_name  →  user_metadata.name  →  display_name  →  username
+//        b) user_metadata.full_name → name → display_name → username
 //        c) Capitalized email prefix  (e.g. "abebe@gmail.com" → "Abebe")
-//      The generic "Student" label is never rendered — every user gets a
-//      name derived from one of the three sources above.
-//   3. Verify the user has passed ALL 4 required courses (score / total ≥ 0.5).
-//   4. Verify the user has an `approved` row in `payments`.
-//   5. Generate a landscape A4 PDF in memory.
-//   6. Try to upload the PDF to Supabase Storage. If the upload FAILS for
+//      The generic "Student" label is never rendered.
+//   5. Verify the user has an `approved` row in `payments`.
+//   6. Generate a landscape A4 PDF in memory.
+//   7. Try to upload the PDF to Supabase Storage. If the upload FAILS for
 //      any reason (missing bucket, RLS denial, network, quota, etc.), fall
 //      back to streaming the PDF directly to the client as a download.
-//   7. On successful upload, return the public URL + certificate ID.
+//   8. On successful upload, return the public URL + certificate ID.
 //
 // This file contains ONLY server-side logic — no JSX, no HTML, no React hooks.
 
 import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { createServerClient } from '@supabase/ssr';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import PDFDocument from 'pdfkit';
 
@@ -34,7 +40,7 @@ export const dynamic = 'force-dynamic';
 // Constants
 // ---------------------------------------------------------------------------
 
-/** The 4 required books — exact `course_id` strings stored in `quiz_results`. */
+/** The 4 required books — used to render the list on the PDF certificate. */
 const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   {
     slug: 'usul_al_thalatha',
@@ -54,8 +60,8 @@ const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   },
 ];
 
-/** Minimum ratio required to pass a book: score / total_questions >= 0.5. */
-const PASS_THRESHOLD = 0.5;
+/** Minimum combined score percentage required to pass. */
+const PASS_THRESHOLD_PERCENT = 50;
 
 /** Supabase Storage bucket that holds the generated PDFs. */
 const CERTIFICATES_BUCKET = 'certificates';
@@ -64,15 +70,12 @@ const CERTIFICATES_BUCKET = 'certificates';
 const PAGE_W = 841.89;
 const PAGE_H = 595.28;
 
+/** Canonical Amharic message returned on eligibility failure. */
+const NOT_ELIGIBLE_MESSAGE =
+  'ሁሉንም ደርሶች እና የማጠቃለያ ፈተና አጠናቀው ከ 50% በላይ ማምጣት አለብዎት።';
+
 // ---------------------------------------------------------------------------
-// Supabase client (lazy, cached) — service-role with anon-key fallback
-//
-// Resolves credentials in this order:
-//   1. SUPABASE_SERVICE_ROLE_KEY  (full access — Auth admin APIs available)
-//   2. NEXT_PUBLIC_SUPABASE_ANON_KEY  (fallback — Auth admin skipped)
-//
-// The fallback means the route no longer throws a 500 "Server misconfigured"
-// response in environments where only the anon key is provided.
+// Supabase service-role client (lazy, cached) — anon-key fallback
 // ---------------------------------------------------------------------------
 
 let cachedClient: SupabaseClient | null = null;
@@ -91,9 +94,7 @@ function getSupabaseClient(): {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url) {
-    throw new Error(
-      'Missing NEXT_PUBLIC_SUPABASE_URL environment variable.'
-    );
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable.');
   }
 
   const chosenKey = serviceKey || anonKey;
@@ -118,6 +119,61 @@ function getSupabaseClient(): {
   cachedClientMode = mode;
 
   return { client: cachedClient, mode };
+}
+
+// ---------------------------------------------------------------------------
+// Authenticated client — reads the caller's session from request cookies.
+// Used to identify WHO is calling. This is the security boundary.
+// ---------------------------------------------------------------------------
+
+async function getAuthClient(): Promise<{
+  user: { id: string; email?: string; user_metadata?: Record<string, unknown> } | null;
+  error: string | null;
+}> {
+  try {
+    const cookieStore = await cookies();
+
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) => {
+                cookieStore.set(name, value, options);
+              });
+            } catch {
+              // In a Route Handler this normally does not throw, but we
+              // guard against it so a cookie write never blocks the request.
+            }
+          },
+        },
+      }
+    );
+
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser();
+
+    if (error) {
+      return { user: null, error: error.message };
+    }
+    if (!user) {
+      return { user: null, error: 'No authenticated session.' };
+    }
+
+    return { user, error: null };
+  } catch (err) {
+    return {
+      user: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,9 +211,6 @@ function formatIssueDate(date: Date): string {
   });
 }
 
-/**
- * Build a filesystem-safe filename for the downloaded certificate PDF.
- */
 function buildCertificateFilename(studentName: string): string {
   const safe = studentName
     .trim()
@@ -166,11 +219,6 @@ function buildCertificateFilename(studentName: string): string {
   return `Basira_Certificate_${safe || 'Certificate'}.pdf`;
 }
 
-/**
- * Return the PDF buffer to the client as a downloadable attachment.
- * Used both as an explicit inline mode and as the fallback when a
- * Supabase Storage upload fails.
- */
 function pdfDownloadResponse(
   pdfBuffer: Buffer,
   filename: string,
@@ -188,10 +236,6 @@ function pdfDownloadResponse(
   });
 }
 
-/**
- * Return the first non-empty trimmed string from the candidates.
- * Returns `''` when nothing usable is found.
- */
 function pickFirstNonEmpty(...candidates: unknown[]): string {
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.trim() !== '') {
@@ -201,16 +245,6 @@ function pickFirstNonEmpty(...candidates: unknown[]): string {
   return '';
 }
 
-/**
- * Turn an email address into a readable display name by capitalizing
- * the local part and splitting on common separators.
- *
- *   "abebe@gmail.com"          → "Abebe"
- *   "abebe.kassa@example.com"  → "Abebe Kassa"
- *   "abebe_kassa@example.com"  → "Abebe Kassa"
- *   "abebe-kassa@example.com"  → "Abebe Kassa"
- *   "abebe123@gmail.com"       → "Abebe123"
- */
 function nameFromEmail(email: string): string {
   const trimmed = email.trim();
   if (trimmed === '') return '';
@@ -219,7 +253,6 @@ function nameFromEmail(email: string): string {
   const localPart = atIndex > 0 ? trimmed.slice(0, atIndex) : trimmed;
   if (localPart === '') return '';
 
-  // Split on `.`, `_`, `-`, and `+` (common separators in email local parts).
   const segments = localPart.split(/[._\-+]+/).filter((s) => s !== '');
   if (segments.length === 0) return '';
 
@@ -233,10 +266,6 @@ function nameFromEmail(email: string): string {
     .join(' ');
 }
 
-/**
- * Resolve a display name from an Auth user object.
- * Returns `''` when nothing usable is found (caller falls back further).
- */
 function nameFromAuthUser(authUser: unknown): string {
   const user = authUser as
     | {
@@ -262,10 +291,6 @@ function nameFromAuthUser(authUser: unknown): string {
   return '';
 }
 
-/**
- * Look up the student's `full_name` from the `profiles` table.
- * Returns `''` on any failure (missing table, missing row, RLS, etc.).
- */
 async function fetchProfileFullName(
   supabase: SupabaseClient,
   userId: string
@@ -294,6 +319,194 @@ async function fetchProfileFullName(
     );
     return '';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Eligibility evaluation — fetches lessons, quiz_results, and applies rules
+// ---------------------------------------------------------------------------
+
+interface EligibilityResult {
+  eligible: boolean;
+  reason: string | null;
+  details: {
+    totalLessons: number;
+    completedLessons: number;
+    hasFinalExam: boolean;
+    finalExamPercent: number;
+    combinedPercent: number;
+  };
+}
+
+async function evaluateEligibility(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<EligibilityResult> {
+  // ---- 1. Count active lessons ----
+  let totalLessons = 0;
+  try {
+    // Try with the `is_active` flag first (preferred).
+    const { count, error } = await supabase
+      .from('lessons')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_active', true);
+
+    if (error) {
+      console.warn(
+        '[generate-certificate] lessons select (is_active) failed, retrying unfiltered:',
+        error.message
+      );
+      const fallback = await supabase
+        .from('lessons')
+        .select('id', { count: 'exact', head: true });
+
+      if (fallback.error) {
+        console.error(
+          '[generate-certificate] lessons select failed (non-fatal):',
+          fallback.error.message
+        );
+        totalLessons = 0;
+      } else {
+        totalLessons = fallback.count ?? 0;
+      }
+    } else {
+      totalLessons = count ?? 0;
+    }
+  } catch (err) {
+    console.error('[generate-certificate] lessons count error:', err);
+    totalLessons = 0;
+  }
+
+  // ---- 2. Fetch the student's quiz attempts ----
+  let attempts: Array<Record<string, any>> = [];
+  try {
+    const { data, error } = await supabase
+      .from('quiz_results')
+      .select('*')
+      .eq('user_id', userId);
+
+    if (error) {
+      return {
+        eligible: false,
+        reason: `የፈተና ውጤቶችን ማግኘት አልተቻለም: ${error.message}`,
+        details: {
+          totalLessons,
+          completedLessons: 0,
+          hasFinalExam: false,
+          finalExamPercent: 0,
+          combinedPercent: 0,
+        },
+      };
+    }
+
+    attempts = (data ?? []) as Array<Record<string, any>>;
+  } catch (err) {
+    return {
+      eligible: false,
+      reason: `የፈተና ውጤቶችን ማግኘት አልተቻለም: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      details: {
+        totalLessons,
+        completedLessons: 0,
+        hasFinalExam: false,
+        finalExamPercent: 0,
+        combinedPercent: 0,
+      },
+    };
+  }
+
+  // ---- 3. Compute best attempt per lesson + best final exam ----
+  const bestByLesson = new Map<string, { score: number; total: number }>();
+  let bestFinalExam: { score: number; total: number } | null = null;
+
+  for (const row of attempts) {
+    const score = Number(row.score) || 0;
+    const total = Number(row.total_questions) || 0;
+
+    if (row.is_final_exam === true) {
+      if (!bestFinalExam || score > bestFinalExam.score) {
+        bestFinalExam = { score, total };
+      }
+      continue;
+    }
+
+    // Identify the lesson — accept any of the common column names.
+    const lessonKey = String(
+      row.lesson_id ?? row.course_id ?? row.course_slug ?? ''
+    );
+    if (!lessonKey) continue;
+
+    const existing = bestByLesson.get(lessonKey);
+    if (!existing || score > existing.score) {
+      bestByLesson.set(lessonKey, { score, total });
+    }
+  }
+
+  const completedLessons = bestByLesson.size;
+
+  // ---- 4. Combined score across lessons + final exam ----
+  let sumScore = 0;
+  let sumTotal = 0;
+  for (const { score, total } of bestByLesson.values()) {
+    sumScore += score;
+    sumTotal += total;
+  }
+  if (bestFinalExam) {
+    sumScore += bestFinalExam.score;
+    sumTotal += bestFinalExam.total;
+  }
+
+  const combinedPercent =
+    sumTotal > 0 ? Math.round((sumScore / sumTotal) * 100) : 0;
+
+  const finalExamPercent = bestFinalExam
+    ? bestFinalExam.total > 0
+      ? Math.round((bestFinalExam.score / bestFinalExam.total) * 100)
+      : 0
+    : 0;
+
+  const hasFinalExam = bestFinalExam !== null;
+
+  // ---- 5. Apply the three rules ----
+  const missingParts: string[] = [];
+
+  if (totalLessons === 0) {
+    missingParts.push('ምንም ንቁ ትምህርቶች አልተገኙም።');
+  } else if (completedLessons < totalLessons) {
+    missingParts.push(
+      `ተጨማሪ ${totalLessons - completedLessons} ደርሶችን ማጠናቀቅ ያስፈልጋል (${completedLessons}/${totalLessons})።`
+    );
+  }
+
+  if (!hasFinalExam) {
+    missingParts.push('የማጠቃለያ ፈተናውን ማጠናቀቅ ያስፈልጋል።');
+  }
+
+  if (combinedPercent < PASS_THRESHOLD_PERCENT) {
+    missingParts.push(
+      `አጠቃላይ ውጤት ቢያንስ ${PASS_THRESHOLD_PERCENT}% መሆን አለበት (አሁን ${combinedPercent}%)።`
+    );
+  }
+
+  const eligible =
+    totalLessons > 0 &&
+    completedLessons >= totalLessons &&
+    hasFinalExam &&
+    combinedPercent >= PASS_THRESHOLD_PERCENT;
+
+  return {
+    eligible,
+    reason: eligible
+      ? null
+      : `${NOT_ELIGIBLE_MESSAGE} ${missingParts.join(' ')}`.trim(),
+    details: {
+      totalLessons,
+      completedLessons,
+      hasFinalExam,
+      finalExamPercent,
+      combinedPercent,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,17 +539,14 @@ function generateCertificatePdf(opts: {
 
       const cx = PAGE_W / 2;
 
-      // Palette
       const DARK_GREEN = '#0f3d24';
       const GOLD = '#c9a227';
       const SLATE = '#4b5563';
       const NEAR_BLACK = '#111827';
       const CREAM = '#fdfbf3';
 
-      // Background
       doc.rect(0, 0, PAGE_W, PAGE_H).fill(CREAM);
 
-      // Triple border
       doc.lineWidth(3).strokeColor(GOLD)
         .rect(20, 20, PAGE_W - 40, PAGE_H - 40).stroke();
       doc.lineWidth(0.75).strokeColor(DARK_GREEN)
@@ -344,7 +554,6 @@ function generateCertificatePdf(opts: {
       doc.lineWidth(0.5).strokeColor(GOLD)
         .rect(34, 34, PAGE_W - 68, PAGE_H - 68).stroke();
 
-      // Corner diamonds
       const drawDiamond = (x: number, y: number, size: number) => {
         doc.moveTo(x, y - size)
           .lineTo(x + size, y)
@@ -358,7 +567,6 @@ function generateCertificatePdf(opts: {
       drawDiamond(34, PAGE_H - 34, 5);
       drawDiamond(PAGE_W - 34, PAGE_H - 34, 5);
 
-      // BASIRA seal
       const sealCY = 95;
       const sealR = 42;
       doc.circle(cx, sealCY, sealR).lineWidth(2).strokeColor(GOLD).stroke();
@@ -373,29 +581,24 @@ function generateCertificatePdf(opts: {
       doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(14)
         .text('BASIRA', cx - 45, sealCY - 10, { width: 90, align: 'center' });
 
-      // Title
       doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(32)
         .text('CERTIFICATE', 0, 158, { align: 'center', width: PAGE_W });
       doc.fillColor(GOLD).font('Helvetica-Bold').fontSize(13)
         .text('OF COMPLETION', 0, 200, { align: 'center', width: PAGE_W });
 
-      // Divider
       const divY = 225;
       doc.moveTo(cx - 150, divY).lineTo(cx + 150, divY)
         .lineWidth(0.75).strokeColor(GOLD).stroke();
       drawDiamond(cx, divY, 4);
 
-      // Certify
       doc.fillColor(SLATE).font('Helvetica-Oblique').fontSize(11)
         .text('This is to certify that', 0, 242, {
           align: 'center', width: PAGE_W,
         });
 
-      // Student name (dynamically resolved)
       doc.fillColor(NEAR_BLACK).font('Helvetica-Bold').fontSize(30)
         .text(studentName, 0, 262, { align: 'center', width: PAGE_W });
 
-      // Underline
       let nameW = 200;
       try {
         nameW = doc.widthOfString(studentName);
@@ -408,14 +611,12 @@ function generateCertificatePdf(opts: {
         .lineTo(cx + nameW / 2 + 20, underY)
         .lineWidth(1).strokeColor(GOLD).stroke();
 
-      // Description
       doc.fillColor(SLATE).font('Helvetica').fontSize(11)
         .text(
           'has successfully completed all four required books of the BASIRA Islamic Studies Program:',
           0, 322, { align: 'center', width: PAGE_W }
         );
 
-      // Books list
       let y = 356;
       for (const book of completedBooks) {
         drawDiamond(cx - 170, y, 3.5);
@@ -424,7 +625,6 @@ function generateCertificatePdf(opts: {
         y += 20;
       }
 
-      // Signature
       const sigY = 468;
       const sigHalf = 80;
       doc.moveTo(cx - sigHalf, sigY).lineTo(cx + sigHalf, sigY)
@@ -434,7 +634,6 @@ function generateCertificatePdf(opts: {
           width: sigHalf * 2, align: 'center',
         });
 
-      // Footer
       const footLabelY = PAGE_H - 78;
       const footValueY = PAGE_H - 62;
       doc.fillColor(SLATE).font('Helvetica-Bold').fontSize(8)
@@ -463,12 +662,30 @@ function generateCertificatePdf(opts: {
 // ---------------------------------------------------------------------------
 
 export async function POST(request: Request) {
-  // ---------- 1. Read and validate the request body ----------
-  let userId = '';
+  // ---------- 1. Authenticate the caller from request cookies ----------
+  const { user: authUser, error: authError } = await getAuthClient();
+
+  if (authError || !authUser) {
+    console.error(
+      '[generate-certificate] Auth error:',
+      authError || 'No authenticated session.'
+    );
+    return NextResponse.json(
+      {
+        eligible: false,
+        error: 'ያልተረጋገጠ ጥያቄ። እባክዎ መጀመሪያ ይግቡ።',
+        code: 'UNAUTHENTICATED',
+      },
+      { status: 401 }
+    );
+  }
+
+  // ---------- 2. Read and validate the request body ----------
+  let bodyUserId = '';
 
   try {
     const body = (await request.json()) as { userId?: string };
-    if (typeof body.userId === 'string') userId = body.userId.trim();
+    if (typeof body.userId === 'string') bodyUserId = body.userId.trim();
   } catch {
     return NextResponse.json(
       { eligible: false, error: 'Invalid JSON body.' },
@@ -476,16 +693,29 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!userId) {
+  // The authenticated user's ID is the source of truth. If the client sent
+  // a different `userId`, reject — this prevents cross-user abuse.
+  if (bodyUserId && bodyUserId !== authUser.id) {
+    console.error(
+      '[generate-certificate] userId mismatch — auth:',
+      authUser.id,
+      'body:',
+      bodyUserId
+    );
     return NextResponse.json(
-      { eligible: false, error: 'Missing required field: userId.' },
-      { status: 400 }
+      {
+        eligible: false,
+        error: 'የተጠቃሚ መለያ አለመመሳሰል። እባክዎ እንደገና ይግቡ።',
+        code: 'USER_ID_MISMATCH',
+      },
+      { status: 403 }
     );
   }
 
+  const userId = authUser.id;
   const safeUserId = sanitizeUserId(userId);
 
-  // ---------- 2. Obtain Supabase client (service role or anon fallback) ----------
+  // ---------- 3. Obtain service-role Supabase client ----------
   let supabase: SupabaseClient;
   let clientMode: 'service' | 'anon';
   try {
@@ -503,74 +733,6 @@ export async function POST(request: Request) {
       },
       { status: 500 }
     );
-  }
-
-  // ---------- 3. Resolve the student's display name ----------
-  //
-  //   Priority chain (first non-empty wins):
-  //     1. profiles.full_name                          ← PRIMARY
-  //     2. user_metadata.full_name
-  //     3. user_metadata.name
-  //     4. user_metadata.display_name   (backward compat)
-  //     5. user_metadata.username       (backward compat)
-  //     6. Capitalized email prefix     (e.g. "abebe@gmail.com" → "Abebe")
-  //
-  //   Every lookup is best-effort; failures fall through to the next
-  //   source. The generic "Student" label is never rendered.
-  // -------------------------------------------------------------
-  let studentName = '';
-
-  // (a) profiles.full_name — the primary source.
-  studentName = await fetchProfileFullName(supabase, userId);
-
-  // (b) Auth metadata + email prefix.
-  //
-  //     We fetch the Auth user via the admin API when the service role key
-  //     is available. Without it (anon fallback), the Auth admin API is not
-  //     callable — but the same metadata is still reachable by using the
-  //     `getUserById` variant via the admin namespace, which the anon key
-  //     cannot access. In that case we simply skip step (b) and rely on
-  //     the profiles lookup above.
-  if (studentName === '') {
-    if (clientMode === 'service') {
-      try {
-        const { data: userData, error: userErr } =
-          await supabase.auth.admin.getUserById(userId);
-
-        if (userErr) {
-          console.warn(
-            '[generate-certificate] getUserById warning:',
-            userErr.message
-          );
-        } else if (userData?.user) {
-          const fromAuth = nameFromAuthUser(userData.user);
-          if (fromAuth !== '') {
-            studentName = fromAuth;
-          }
-        }
-      } catch (userCatch) {
-        console.warn(
-          '[generate-certificate] getUserById unexpected error:',
-          userCatch instanceof Error ? userCatch.message : String(userCatch)
-        );
-      }
-    } else {
-      // Anon-key fallback path — try to derive the name from the email
-      // that the client sent, if available. (The `profiles` lookup above
-      // already ran; if it returned nothing, we fall through.)
-      console.warn(
-        '[generate-certificate] Anon key in use — Auth admin lookup skipped; ' +
-          'relying on the profiles table lookup for the display name.'
-      );
-    }
-  }
-
-  // (c) Absolute last resort — derive from the userId itself so we never
-  //     render a hardcoded label. This produces something like
-  //     "User A1B2C3D4" which is still unique and non-generic.
-  if (studentName === '') {
-    const shortId = userId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
-    studentName = shortId !== '' ? `User ${shortId}` : 'Certificate Holder';
   }
 
   // ---------- 4. Verify payment approval ----------
@@ -593,73 +755,87 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         eligible: false,
-        error: 'ሰርቲፊኬት ለማውረድ ክፍያዎ በአድሚን መረጋገጥ አለበት።',
+        error: 'ሰርተፊኬት ለማውረድ ክፍያዎ በአድሚን መረጋገጥ አለበት።',
       },
       { status: 403 }
     );
   }
 
-  // ---------- 5. Verify all 4 courses passed (score / total ≥ 0.5) ----------
-  const courseSlugs = REQUIRED_COURSES.map((c) => c.slug);
+  // ---------- 5. Evaluate lessons + final exam + combined score ----------
+  const eligibility = await evaluateEligibility(supabase, userId);
 
-  const { data: results, error: resultsError } = await supabase
-    .from('quiz_results')
-    .select('course_id, score, total_questions')
-    .eq('user_id', userId)
-    .in('course_id', courseSlugs);
-
-  if (resultsError) {
-    console.error('[generate-certificate] quiz_results error:', resultsError);
-    return NextResponse.json(
-      { eligible: false, error: 'Failed to read quiz results.' },
-      { status: 500 }
+  if (!eligibility.eligible) {
+    console.warn(
+      '[generate-certificate] Eligibility failed for user',
+      userId,
+      '—',
+      eligibility.details
     );
-  }
-
-  const passedCourses = new Set<string>();
-  const bestRatioByCourse = new Map<string, number>();
-
-  for (const row of results ?? []) {
-    const slug = String(row.course_id ?? '');
-    if (!slug) continue;
-    const ratio = computeRatio(row.score, row.total_questions);
-    const prev = bestRatioByCourse.get(slug) ?? 0;
-    if (ratio > prev) bestRatioByCourse.set(slug, ratio);
-    if (ratio >= PASS_THRESHOLD) passedCourses.add(slug);
-  }
-
-  const missingCourses = REQUIRED_COURSES.filter(
-    (c) => !passedCourses.has(c.slug)
-  );
-
-  if (missingCourses.length > 0) {
-    const details = missingCourses
-      .map((c) => {
-        const ratio = bestRatioByCourse.get(c.slug);
-        if (ratio === undefined) {
-          return `${c.displayName}: no attempt on record`;
-        }
-        return `${c.displayName}: best score ${Math.round(ratio * 100)}% (needs ≥ 50%)`;
-      })
-      .join(' | ');
-
     return NextResponse.json(
       {
         eligible: false,
-        error: `ሰርቲፊኬት ለማውረድ ሁሉንም 4 ኪታቦች ቢያንስ 50% ማጠናቀቅ አለብዎት። ${details}`,
-        missingCourses: missingCourses.map((c) => ({
-          slug: c.slug,
-          displayName: c.displayName,
-          bestPercent: bestRatioByCourse.has(c.slug)
-            ? Math.round((bestRatioByCourse.get(c.slug) ?? 0) * 100)
-            : null,
-        })),
+        error: eligibility.reason || NOT_ELIGIBLE_MESSAGE,
+        details: eligibility.details,
       },
-      { status: 403 }
+      { status: 400 }
     );
   }
 
-  // ---------- 6. Generate the PDF ----------
+  // ---------- 6. Resolve the student's display name ----------
+  //
+  //   Priority chain (first non-empty wins):
+  //     1. profiles.full_name                       ← PRIMARY
+  //     2. auth user_metadata.full_name / name / display_name / username
+  //     3. Capitalized email prefix
+  //     4. "User <short-id>" as absolute last resort (never "Student")
+  //
+  let studentName = '';
+
+  // (a) profiles.full_name
+  studentName = await fetchProfileFullName(supabase, userId);
+
+  // (b) Auth metadata + email prefix
+  if (studentName === '') {
+    // First, use the already-authenticated user object we obtained above.
+    const fromAuthSession = nameFromAuthUser(authUser);
+    if (fromAuthSession !== '') {
+      studentName = fromAuthSession;
+    }
+
+    // If still empty and we have service-role access, try the admin API
+    // for a richer metadata lookup.
+    if (studentName === '' && clientMode === 'service') {
+      try {
+        const { data: userData, error: userErr } =
+          await supabase.auth.admin.getUserById(userId);
+
+        if (userErr) {
+          console.warn(
+            '[generate-certificate] getUserById warning:',
+            userErr.message
+          );
+        } else if (userData?.user) {
+          const fromAdmin = nameFromAuthUser(userData.user);
+          if (fromAdmin !== '') {
+            studentName = fromAdmin;
+          }
+        }
+      } catch (userCatch) {
+        console.warn(
+          '[generate-certificate] getUserById unexpected error:',
+          userCatch instanceof Error ? userCatch.message : String(userCatch)
+        );
+      }
+    }
+  }
+
+  // (c) Absolute last resort — derive from the userId itself.
+  if (studentName === '') {
+    const shortId = userId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+    studentName = shortId !== '' ? `User ${shortId}` : 'Certificate Holder';
+  }
+
+  // ---------- 7. Generate the PDF ----------
   const issueDate = new Date();
   const certificateId = generateCertificateId();
   const filePath = `${safeUserId}/${certificateId}.pdf`;
@@ -681,13 +857,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // ---------- 7. Try to upload the PDF to Supabase Storage ----------
-  //
-  // If the upload fails for ANY reason (missing bucket, RLS denial,
-  // network error, quota, etc.), we DO NOT return a 500. Instead we
-  // gracefully fall back to streaming the PDF directly to the client as
-  // an attachment. The certificate is still valid and the student gets
-  // their file — only the persistent URL is unavailable in that case.
+  // ---------- 8. Try to upload the PDF to Supabase Storage ----------
   let uploadFailed = false;
   let uploadErrorMessage = '';
 
@@ -718,7 +888,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // ---------- 8a. Fallback: stream the PDF directly ----------
+  // ---------- 9a. Fallback: stream the PDF directly ----------
   if (uploadFailed) {
     console.warn(
       `[generate-certificate] Delivering PDF inline (storage unavailable). Reason: ${uploadErrorMessage}`
@@ -726,15 +896,13 @@ export async function POST(request: Request) {
     return pdfDownloadResponse(pdfBuffer, downloadFilename, certificateId);
   }
 
-  // ---------- 8b. Happy path: resolve the public URL ----------
+  // ---------- 9b. Happy path: resolve the public URL ----------
   const { data: publicUrlData } = supabase.storage
     .from(CERTIFICATES_BUCKET)
     .getPublicUrl(filePath);
 
   const certificateUrl = publicUrlData?.publicUrl ?? '';
 
-  // If for some reason the URL cannot be resolved, also fall back to
-  // streaming the PDF rather than failing the request.
   if (!certificateUrl) {
     console.warn(
       '[generate-certificate] getPublicUrl returned empty — falling back to direct PDF stream.'
@@ -747,7 +915,7 @@ export async function POST(request: Request) {
     return pdfDownloadResponse(pdfBuffer, downloadFilename, certificateId);
   }
 
-  // ---------- 9. Success ----------
+  // ---------- 10. Success ----------
   return NextResponse.json(
     {
       eligible: true,
@@ -758,9 +926,7 @@ export async function POST(request: Request) {
     },
     {
       status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
     }
   );
 }
