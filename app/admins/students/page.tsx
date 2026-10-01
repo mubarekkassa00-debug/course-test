@@ -15,7 +15,6 @@ import { createBrowserClient } from '@supabase/ssr';
 import {
   Search,
   Download,
-  User,
   CheckCircle,
   XCircle,
   BookOpen,
@@ -36,7 +35,7 @@ import {
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// Supabase browser client (singleton for the lifetime of the page)
+// Supabase browser client (module-level singleton)
 // ---------------------------------------------------------------------------
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -44,9 +43,8 @@ const supabase = createBrowserClient(
 );
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants — the 4 required Kitabs of Basira
 // ---------------------------------------------------------------------------
-
 const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   { slug: 'usul_al_thalatha', displayName: 'ኡሱሉ ሰላሳ' },
   { slug: 'arbain', displayName: 'አርባኢን ነወዊ' },
@@ -63,7 +61,6 @@ const PASS_THRESHOLD_PERCENT = 50;
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
 interface ProfileRow {
   id: string;
   full_name: string | null;
@@ -135,18 +132,20 @@ function formatDateAmh(iso: string | null): string {
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleDateString('en-GB', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}/${mm}/${dd}`;
   } catch {
     return '—';
   }
 }
 
+/**
+ * Group a student's raw quiz rows into per-course lesson breakdowns.
+ * Lessons are numbered by chronological order of attempts (oldest = ደርስ 1).
+ */
 function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
-  // Group by course
   const byCourse = new Map<string, QuizRow[]>();
   for (const r of rows) {
     const slug = String(r.course_id ?? '');
@@ -159,7 +158,6 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
   const breakdowns: CourseBreakdown[] = [];
 
   for (const [slug, arr] of byCourse.entries()) {
-    // Oldest first so lesson numbers reflect study order
     const ordered = [...arr].sort((a, b) => {
       const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
       const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
@@ -200,7 +198,7 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
     });
   }
 
-  // Sort breakdowns by most recent activity (descending)
+  // Most-recent activity first
   breakdowns.sort((a, b) => {
     const ta = a.lastDate ? new Date(a.lastDate).getTime() : 0;
     const tb = b.lastDate ? new Date(b.lastDate).getTime() : 0;
@@ -210,6 +208,7 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
   return breakdowns;
 }
 
+/** Trigger a UTF-8 BOM CSV download so Amharic renders correctly in Excel. */
 function downloadCSV(rows: StudentRow[]) {
   const headers = [
     'ስም',
@@ -279,7 +278,6 @@ function downloadCSV(rows: StudentRow[]) {
 // ---------------------------------------------------------------------------
 // Page Component
 // ---------------------------------------------------------------------------
-
 export default function AdminStudentsPage() {
   const router = useRouter();
 
@@ -295,7 +293,7 @@ export default function AdminStudentsPage() {
   const [selected, setSelected] = useState<StudentRow | null>(null);
 
   // -------------------------------------------------------------------------
-  // 1. AUTH + ADMIN ROLE GUARD
+  // 1. AUTH + ADMIN GUARD
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -324,7 +322,6 @@ export default function AdminStudentsPage() {
 
         if (profileErr) {
           console.error('[AdminStudents] profile lookup failed:', profileErr);
-          // Don't block the page if role lookup fails — allow read-only view.
           setAuthLoading(false);
           return;
         }
@@ -351,21 +348,16 @@ export default function AdminStudentsPage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // 2. FETCH DATA — defensive, per-table error isolation
-  //
-  //    Each table is queried independently. If one table fails (RLS,
-  //    missing column, network), we log the error and continue with what
-  //    we have — no more all-or-nothing "የተማሪ መረጃ ማግኘት አልተቻለም".
+  // 2. DATA LOAD — defensive, per-table isolation
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
     setDataError(null);
 
     try {
-      // ---- Profiles (with graceful column fallback) ----
+      // ---- profiles: try full select, fall back to minimal ----
       let profiles: ProfileRow[] = [];
 
-      // First try: full select
       const fullSelect = await supabase
         .from('profiles')
         .select('id, full_name, phone, email, role, created_at')
@@ -375,12 +367,10 @@ export default function AdminStudentsPage() {
         profiles = (fullSelect.data ?? []) as ProfileRow[];
       } else {
         console.warn(
-          '[AdminStudents] Full profiles select failed, retrying minimal columns:',
+          '[AdminStudents] Full profiles select failed, retrying with minimal columns:',
           fullSelect.error.message
         );
 
-        // Fallback: minimal select that works even if `phone` column
-        // or similar optional columns are missing from the schema.
         const minimalSelect = await supabase
           .from('profiles')
           .select('id, full_name, email, role, created_at')
@@ -398,12 +388,12 @@ export default function AdminStudentsPage() {
           return;
         }
 
-        profiles = ((minimalSelect.data ?? []) as Omit<ProfileRow, 'phone'>[]).map(
-          (p) => ({ ...p, phone: null })
-        );
+        profiles = (
+          (minimalSelect.data ?? []) as Omit<ProfileRow, 'phone'>[]
+        ).map((p) => ({ ...p, phone: null }));
       }
 
-      // ---- Quiz results (isolated) ----
+      // ---- quiz_results: isolated fetch ----
       let quizRows: QuizRow[] = [];
       const quizRes = await supabase
         .from('quiz_results')
@@ -419,7 +409,7 @@ export default function AdminStudentsPage() {
         quizRows = (quizRes.data ?? []) as QuizRow[];
       }
 
-      // ---- Build lookup maps ----
+      // ---- index quiz rows by user ----
       const quizzesByUser = new Map<string, QuizRow[]>();
       for (const q of quizRows) {
         const arr = quizzesByUser.get(q.user_id) ?? [];
@@ -427,7 +417,7 @@ export default function AdminStudentsPage() {
         quizzesByUser.set(q.user_id, arr);
       }
 
-      // ---- Compose student rows ----
+      // ---- compose student rows ----
       const rows: StudentRow[] = profiles
         .filter((p) => p.role !== 'admin')
         .map((p) => {
@@ -437,7 +427,6 @@ export default function AdminStudentsPage() {
           const passedCount = breakdown.filter((b) => b.passed).length;
           const totalCourses = REQUIRED_COURSES.length;
 
-          // Progress = how far through the 4-kitab threshold path they are
           const progressPercent = Math.round(
             (REQUIRED_COURSES.reduce((acc, c) => {
               const b = breakdown.find((x) => x.courseId === c.slug);
@@ -458,7 +447,6 @@ export default function AdminStudentsPage() {
                 )
               : 0;
 
-          // Current kitab + lesson = the most recently attempted course
           const current = breakdown[0] ?? null;
           const currentCourseName = current?.courseName ?? null;
           const currentLessonNumber = current
@@ -566,7 +554,7 @@ export default function AdminStudentsPage() {
   const closeModal = useCallback(() => setSelected(null), []);
 
   // -------------------------------------------------------------------------
-  // 6. RENDER — Loading (auth)
+  // 6. AUTH LOADING / ERROR
   // -------------------------------------------------------------------------
   if (authLoading) {
     return (
@@ -606,12 +594,12 @@ export default function AdminStudentsPage() {
   }
 
   // -------------------------------------------------------------------------
-  // 7. RENDER — Main
+  // 7. MAIN RENDER
   // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* ================================================================= */}
-      {/* Sticky Header                                                      */}
+      {/* Header                                                             */}
       {/* ================================================================= */}
       <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/85 dark:bg-slate-900/85 border-b border-slate-200/70 dark:border-slate-800/70">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4">
@@ -657,7 +645,7 @@ export default function AdminStudentsPage() {
       {/* Main                                                               */}
       {/* ================================================================= */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* Stats row */}
+        {/* ---------- Stats ---------- */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
           <StatCard
             label="ጠቅላላ ተማሪዎች"
@@ -685,9 +673,8 @@ export default function AdminStudentsPage() {
           />
         </div>
 
-        {/* Toolbar */}
+        {/* ---------- Toolbar ---------- */}
         <div className="mb-5 flex flex-col lg:flex-row lg:items-center gap-3">
-          {/* Search */}
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
@@ -699,7 +686,6 @@ export default function AdminStudentsPage() {
             />
           </div>
 
-          {/* Filter buttons */}
           <div className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-1">
             {(
               [
@@ -723,7 +709,6 @@ export default function AdminStudentsPage() {
             ))}
           </div>
 
-          {/* Export */}
           <button
             type="button"
             onClick={handleExport}
@@ -735,7 +720,7 @@ export default function AdminStudentsPage() {
           </button>
         </div>
 
-        {/* Error */}
+        {/* ---------- Error banner ---------- */}
         {dataError && (
           <div
             role="alert"
@@ -746,7 +731,7 @@ export default function AdminStudentsPage() {
           </div>
         )}
 
-        {/* Table card */}
+        {/* ---------- Table ---------- */}
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
           {dataLoading ? (
             <TableSkeleton />
@@ -873,14 +858,13 @@ export default function AdminStudentsPage() {
           )}
         </div>
 
-        {/* Footer note */}
         <p className="mt-4 text-center text-xs text-slate-400 dark:text-slate-500">
           {filtered.length} ከ {students.length} ተማሪዎች ይታያሉ
         </p>
       </main>
 
       {/* ================================================================= */}
-      {/* Student Detail Modal                                               */}
+      {/* Detail Modal                                                       */}
       {/* ================================================================= */}
       {selected && <StudentModal student={selected} onClose={closeModal} />}
     </div>
@@ -935,7 +919,6 @@ function StatCard({
 function TableSkeleton() {
   return (
     <div className="p-5 space-y-3">
-      {/* Header skeleton */}
       <div className="grid grid-cols-6 gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
         {[1, 2, 3, 4, 5, 6].map((i) => (
           <div
@@ -944,7 +927,6 @@ function TableSkeleton() {
           />
         ))}
       </div>
-      {/* Rows skeleton */}
       {[1, 2, 3, 4, 5].map((row) => (
         <div key={row} className="grid grid-cols-6 gap-4 py-3">
           <div className="flex items-center gap-3">
@@ -978,7 +960,6 @@ function StudentModal({
   student: StudentRow;
   onClose: () => void;
 }) {
-  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -987,7 +968,6 @@ function StudentModal({
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // Lock body scroll while open
   useEffect(() => {
     const original = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -1004,14 +984,12 @@ function StudentModal({
       role="dialog"
       aria-modal="true"
     >
-      {/* Backdrop */}
       <div
         className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden="true"
       />
 
-      {/* Panel */}
       <div className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl">
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-4">
@@ -1020,7 +998,9 @@ function StudentModal({
               {student.fullName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg font-bold truncate">{student.fullName}</h2>
+              <h2 className="text-lg font-bold truncate">
+                {student.fullName}
+              </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 ዝርዝር የፈተና ውጤት
               </p>
@@ -1039,7 +1019,7 @@ function StudentModal({
 
         {/* Body */}
         <div className="px-5 sm:px-6 py-5 space-y-6">
-          {/* Contact card */}
+          {/* Contact */}
           <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
@@ -1112,7 +1092,7 @@ function StudentModal({
             </div>
           </section>
 
-          {/* Lesson-by-lesson breakdown */}
+          {/* Lesson breakdown */}
           <section>
             <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
               <BookOpen className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
@@ -1170,7 +1150,7 @@ function StudentModal({
                       </span>
                     </div>
 
-                    {/* Lessons list */}
+                    {/* Lessons */}
                     <div className="divide-y divide-slate-100 dark:divide-slate-800">
                       {course.lessons.map((lesson) => (
                         <div
