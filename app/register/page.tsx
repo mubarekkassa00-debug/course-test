@@ -3,12 +3,24 @@
 
 import { useState, FormEvent } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Mail, User, Lock, AlertCircle, Loader2 } from 'lucide-react';
+import {
+  Mail,
+  User,
+  Lock,
+  Phone,
+  AlertCircle,
+  Loader2,
+} from 'lucide-react';
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 type FormData = {
   fullName: string;
   email: string;
+  phone: string;
   password: string;
   confirmPassword: string;
 };
@@ -19,21 +31,28 @@ type FormErrors = Partial<Record<keyof FormData, string>> & {
 
 type FormState = 'idle' | 'loading' | 'success' | 'error';
 
+// ---------------------------------------------------------------------------
+// Validation constants
+// ---------------------------------------------------------------------------
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 const MIN_PASSWORD_LENGTH = 6;
 
+// Ethiopian phone: accepts 09xxxxxxxx, 07xxxxxxxx, +2519xxxxxxxx, +2517xxxxxxxx
+// Strips spaces/dashes on validation so users can paste formatted numbers.
+const PHONE_REGEX = /^(?:\+251|0)(9|7)\d{8}$/;
+
+function normalizePhone(raw: string): string {
+  return raw.replace(/[\s-]/g, '').trim();
+}
+
 // ---------------------------------------------------------------------------
 // Explicit production callback URL for the email verification link.
-// This is the URL that Supabase will embed in the verification email.
-// After the user clicks the link, they land on /auth/callback where the
-// OAuth/verification code is exchanged for a session, then redirected to
-// /dashboard (or the `next` param).
 // ---------------------------------------------------------------------------
 const EMAIL_REDIRECT_URL =
   'https://course-test-two.vercel.app/auth/callback';
 
 // ---------------------------------------------------------------------------
-// Google "G" brand icon (inline SVG so we don't pull an extra dependency).
+// Google icon
 // ---------------------------------------------------------------------------
 function GoogleIcon({ className }: { className?: string }) {
   return (
@@ -64,9 +83,12 @@ function GoogleIcon({ className }: { className?: string }) {
 }
 
 export default function RegisterPage() {
+  const router = useRouter();
+
   const [formData, setFormData] = useState<FormData>({
     fullName: '',
     email: '',
+    phone: '',
     password: '',
     confirmPassword: '',
   });
@@ -75,6 +97,9 @@ export default function RegisterPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
 
+  // -------------------------------------------------------------------------
+  // Validation
+  // -------------------------------------------------------------------------
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
 
@@ -88,6 +113,14 @@ export default function RegisterPage() {
       newErrors.email = 'ኢሜይል ማስገባት ግዴታ ነው።';
     } else if (!EMAIL_REGEX.test(formData.email.trim())) {
       newErrors.email = 'እባክዎ ትክክለኛ የኢሜይል አድራሻ ያስገቡ።';
+    }
+
+    const cleanedPhone = normalizePhone(formData.phone);
+    if (!cleanedPhone) {
+      newErrors.phone = 'የስልክ ቁጥር ማስገባት ግዴታ ነው።';
+    } else if (!PHONE_REGEX.test(cleanedPhone)) {
+      newErrors.phone =
+        'ትክክለኛ የስልክ ቁጥር ያስገቡ (ምሳሌ፡ 0911223344 ወይም +251911223344)።';
     }
 
     if (!formData.password) {
@@ -123,17 +156,15 @@ export default function RegisterPage() {
     }
   };
 
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // EMAIL + PASSWORD REGISTRATION
   //
   // Flow:
-  //   1. Validate form (client-side).
-  //   2. Call `supabase.auth.signUp()` with:
-  //        • user metadata: { full_name }
-  //        • emailRedirectTo: the explicit production callback URL.
-  //   3. On success → show the "check your email" success screen.
-  //   4. On error → show an Amharic error message tailored to the error type.
-  // ---------------------------------------------------------------------------
+  //   1. Validate form client-side (including phone).
+  //   2. `supabase.auth.signUp()` with user_metadata = { full_name, phone }.
+  //   3. On success, upsert the same data into `profiles`.
+  //   4. Show the "verify your email" success screen.
+  // -------------------------------------------------------------------------
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -142,25 +173,25 @@ export default function RegisterPage() {
     setFormState('loading');
     setErrorMessage('');
 
+    const cleanedPhone = normalizePhone(formData.phone);
+    const cleanName = formData.fullName.trim();
+    const cleanEmail = formData.email.trim();
+
     try {
+      // ---- 1. Create auth user ----
       const { data, error } = await supabase.auth.signUp({
-        email: formData.email.trim(),
+        email: cleanEmail,
         password: formData.password,
         options: {
           data: {
-            full_name: formData.fullName.trim(),
+            full_name: cleanName,
+            phone: cleanedPhone,
           },
-          // Explicit production callback URL — Supabase embeds this in the
-          // verification email. After the user clicks the link, they land
-          // on /auth/callback, which exchanges the code for a session and
-          // forwards them to /dashboard.
           emailRedirectTo: EMAIL_REDIRECT_URL,
         },
       });
 
-      // -----------------------------------------------------------------
-      // Supabase-side error (network, rate-limit, invalid email, etc.)
-      // -----------------------------------------------------------------
+      // ---- Handle Supabase-side error ----
       if (error) {
         const msg = (error.message || '').toLowerCase();
 
@@ -201,12 +232,7 @@ export default function RegisterPage() {
         return;
       }
 
-      // -----------------------------------------------------------------
-      // Defensive check: Supabase returns an empty `identities` array when
-      // the email is already registered (and email enumeration protection
-      // is enabled). In that case we surface a clear message instead of
-      // pretending the signup succeeded.
-      // -----------------------------------------------------------------
+      // ---- Duplicate email (Supabase returns empty identities) ----
       if (data?.user?.identities?.length === 0) {
         setErrorMessage(
           'በዚህ ኢሜይል የተመዘገበ መለያ አስቀድሞ አለ። እባክዎ ይግቡ።'
@@ -215,11 +241,37 @@ export default function RegisterPage() {
         return;
       }
 
-      // -----------------------------------------------------------------
-      // Success — show the "verify your email" screen.
-      // The user will receive a verification email at `formData.email`.
-      // Clicking the link lands on /auth/callback → /dashboard.
-      // -----------------------------------------------------------------
+      // ---- 2. Write to `profiles` ----
+      //
+      // We attempt an upsert keyed on `id`. If RLS is not yet configured
+      // to allow self-inserts, the insert silently fails — the auth user
+      // still exists, and the /complete-profile page will pick up the
+      // missing phone later. We log the error so it's visible in DevTools.
+      const userId = data?.user?.id;
+
+      if (userId) {
+        const { error: profileErr } = await supabase
+          .from('profiles')
+          .upsert(
+            {
+              id: userId,
+              full_name: cleanName,
+              email: cleanEmail,
+              phone: cleanedPhone,
+              role: 'student',
+            },
+            { onConflict: 'id' }
+          );
+
+        if (profileErr) {
+          console.error(
+            'DEBUG_SUPABASE_ERROR (profiles upsert, non-fatal):',
+            profileErr
+          );
+        }
+      }
+
+      // ---- 3. Success screen ----
       setFormState('success');
     } catch (err) {
       setErrorMessage(
@@ -231,12 +283,11 @@ export default function RegisterPage() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Google OAuth sign-up — redirects to the Supabase Auth callback route so
-  // the OAuth code exchange happens server-side (via /auth/callback), which
-  // then forwards the authenticated user to the destination passed via the
-  // `?next=` query parameter.
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Google OAuth sign-up — after Google auth, the user may be missing a
+  // phone number. `/auth/callback` detects that and forwards them to
+  // `/complete-profile`, where they fill in the phone before proceeding.
+  // -------------------------------------------------------------------------
   const handleGoogleSignUp = async () => {
     setGoogleLoading(true);
     setErrorMessage('');
@@ -256,11 +307,6 @@ export default function RegisterPage() {
         setGoogleLoading(false);
         return;
       }
-
-      // On success, Supabase redirects the browser to Google's consent
-      // screen — no further client-side action is needed here. We keep
-      // `googleLoading` true so the button shows the spinner during the
-      // in-flight redirect.
     } catch (err) {
       setErrorMessage(
         err instanceof Error
@@ -272,9 +318,9 @@ export default function RegisterPage() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Success screen — Amharic
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Success screen
+  // -------------------------------------------------------------------------
   if (formState === 'success') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-emerald-50 dark:from-slate-950 dark:to-slate-900 px-4 py-12">
@@ -330,9 +376,9 @@ export default function RegisterPage() {
     );
   }
 
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   // Registration form
-  // ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-emerald-50 dark:from-slate-950 dark:to-slate-900 px-4 py-12">
       <div className="w-full max-w-md">
@@ -381,7 +427,6 @@ export default function RegisterPage() {
             )}
           </button>
 
-          {/* Divider */}
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center" aria-hidden="true">
               <div className="w-full border-t border-slate-200 dark:border-slate-700" />
@@ -393,7 +438,6 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* Error banner */}
           {errorMessage && (
             <div className="mb-6 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4">
               <div className="flex items-start gap-3">
@@ -477,6 +521,42 @@ export default function RegisterPage() {
                 <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {errors.email}
+                </p>
+              )}
+            </div>
+
+            {/* Phone Number — NEW */}
+            <div>
+              <label
+                htmlFor="phone"
+                className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+              >
+                የስልክ ቁጥር
+              </label>
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
+                  <Phone className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+                </div>
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={formData.phone}
+                  onChange={handleChange('phone')}
+                  placeholder="ምሳሌ: 0911223344"
+                  className={`block w-full rounded-xl border ${
+                    errors.phone
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-200 dark:border-red-500/50 dark:focus:border-red-400 dark:focus:ring-red-500/20'
+                      : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-200 dark:border-slate-700 dark:focus:border-emerald-400 dark:focus:ring-emerald-500/20'
+                  } py-3 pl-11 pr-4 text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all duration-200 text-sm`}
+                />
+              </div>
+              {errors.phone && (
+                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                  {errors.phone}
                 </p>
               )}
             </div>
