@@ -152,31 +152,82 @@ function computePercent(score: unknown, totalQuestions: unknown): number {
 /**
  * Build the per-course progress list.
  *
- * The `catalogue` argument drives which books are displayed. Each course's
- * `bestPercent` is derived from the student's best attempt across all rows
- * in `quiz_results` for that course.
+ * AGGREGATION RULE (updated):
+ *   For each course_id, sum the earned `score` and the maximum possible
+ *   `total_questions` across ALL quiz_results rows, then compute the
+ *   aggregate percentage as:
+ *
+ *       Math.round((sumScore / sumTotalQuestions) * 100)
+ *
+ *   This reflects the student's overall performance across every attempt
+ *   for that course — not just the single best attempt.
+ *
+ * STATUS RULES:
+ *   • 'passed'      → aggregate percentage >= PASS_THRESHOLD_PERCENT (50%)
+ *   • 'in_progress' → at least one quiz row exists for the course, but
+ *                     aggregate percentage < 50%
+ *   • 'not_started' → no quiz rows exist for the course at all
+ *
+ * The `catalogue` argument drives which books are displayed.
  */
 function buildCourseProgress(
   rawRows: any[],
   catalogue: CourseMeta[]
 ): CourseProgress[] {
-  const bestByCourse = new Map<string, number>();
+  // Aggregate (sum score, sum total_questions) per course across ALL rows.
+  const aggregateByCourse = new Map<
+    string,
+    { totalScore: number; totalQuestions: number }
+  >();
 
   for (const row of rawRows || []) {
     const slug = String(row?.course_id ?? '');
     if (!slug) continue;
-    const pct = computePercent(row?.score, row?.total_questions);
-    const prev = bestByCourse.get(slug) ?? 0;
-    if (pct > prev) bestByCourse.set(slug, pct);
+
+    const score = Number(row?.score) || 0;
+    const total = Number(row?.total_questions) || 0;
+
+    const current = aggregateByCourse.get(slug) ?? {
+      totalScore: 0,
+      totalQuestions: 0,
+    };
+
+    current.totalScore += score;
+    current.totalQuestions += total;
+    aggregateByCourse.set(slug, current);
   }
 
   return catalogue.map(({ slug, displayName }) => {
-    const best = bestByCourse.get(slug) ?? 0;
-    let status: CourseStatus = 'not_started';
-    if (best >= PASS_THRESHOLD_PERCENT) status = 'passed';
-    else if (best > 0) status = 'in_progress';
+    const agg = aggregateByCourse.get(slug);
 
-    return { slug, displayName, bestPercent: best, status };
+    // No quiz attempts recorded for this course at all.
+    if (!agg) {
+      return {
+        slug,
+        displayName,
+        bestPercent: 0,
+        status: 'not_started' as CourseStatus,
+      };
+    }
+
+    // Aggregate percentage across all attempts.
+    const aggregatedPercent =
+      agg.totalQuestions > 0
+        ? Math.round((agg.totalScore / agg.totalQuestions) * 100)
+        : 0;
+
+    // At least one row exists → the student has engaged with this course.
+    // Status is 'passed' only if the aggregate clears the threshold;
+    // otherwise it's 'in_progress'.
+    let status: CourseStatus = 'in_progress';
+    if (aggregatedPercent >= PASS_THRESHOLD_PERCENT) status = 'passed';
+
+    return {
+      slug,
+      displayName,
+      bestPercent: aggregatedPercent,
+      status,
+    };
   });
 }
 
@@ -708,15 +759,20 @@ export default function DashboardPage() {
   const allCoursesPassed =
     totalCoursesCount > 0 && passedCount === totalCoursesCount;
 
+  // -------------------------------------------------------------------------
+  // Overall progress = plain average of every course's aggregated percentage.
+  //
+  //   overallProgressPct = (sum of all course percentages) / totalCoursesCount
+  //
+  // No capping at 50% and no partial credit weighting — this reflects the
+  // student's true standing across all courses, so a course at 100% pulls
+  // the average up and a course at 20% pulls it down proportionally.
+  // -------------------------------------------------------------------------
   const overallProgressPct =
     totalCoursesCount > 0
       ? Math.round(
-          (courseProgress.reduce(
-            (acc, c) => acc + Math.min(c.bestPercent, PASS_THRESHOLD_PERCENT),
-            0
-          ) /
-            (totalCoursesCount * PASS_THRESHOLD_PERCENT)) *
-            100
+          courseProgress.reduce((acc, c) => acc + c.bestPercent, 0) /
+            totalCoursesCount
         )
       : 0;
 
