@@ -58,13 +58,23 @@ interface CourseProgress {
   status: CourseStatus;
 }
 
+/** Shape of an entry in the dynamic course catalogue. */
+interface CourseMeta {
+  slug: string;
+  displayName: string;
+}
+
 type PaymentStatus = 'none' | 'pending' | 'approved' | 'rejected';
 
 // ---------------------------------------------------------------------------
-// Course catalogue (4 required books)
+// Fallback course catalogue (4 required books).
+//
+// This is used ONLY when the dynamic fetch from Supabase fails, so the
+// dashboard never renders empty. When the fetch succeeds, the live list
+// replaces this fallback everywhere (progress cards, header count, etc.).
 // ---------------------------------------------------------------------------
 
-const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
+const REQUIRED_COURSES: CourseMeta[] = [
   { slug: 'usul_al_thalatha', displayName: 'ኡሱሉ ሰላሳ' },
   { slug: 'arbain', displayName: 'አርባኢን ነወዊ' },
   { slug: 'shurut_as_salah', displayName: 'ሹሩጡ ሶላት' },
@@ -139,7 +149,17 @@ function computePercent(score: unknown, totalQuestions: unknown): number {
   return Math.round((s / t) * 100);
 }
 
-function buildCourseProgress(rawRows: any[]): CourseProgress[] {
+/**
+ * Build the per-course progress list.
+ *
+ * The `catalogue` argument drives which books are displayed. Each course's
+ * `bestPercent` is derived from the student's best attempt across all rows
+ * in `quiz_results` for that course.
+ */
+function buildCourseProgress(
+  rawRows: any[],
+  catalogue: CourseMeta[]
+): CourseProgress[] {
   const bestByCourse = new Map<string, number>();
 
   for (const row of rawRows || []) {
@@ -150,7 +170,7 @@ function buildCourseProgress(rawRows: any[]): CourseProgress[] {
     if (pct > prev) bestByCourse.set(slug, pct);
   }
 
-  return REQUIRED_COURSES.map(({ slug, displayName }) => {
+  return catalogue.map(({ slug, displayName }) => {
     const best = bestByCourse.get(slug) ?? 0;
     let status: CourseStatus = 'not_started';
     if (best >= PASS_THRESHOLD_PERCENT) status = 'passed';
@@ -205,6 +225,15 @@ export default function DashboardPage() {
 
   // Mobile hamburger menu open/close state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // -------------------------------------------------------------------------
+  // DYNAMIC COURSE CATALOGUE
+  //
+  // Starts with the hardcoded fallback so the UI never renders empty.
+  // A background fetch replaces it with the live list from the database.
+  // -------------------------------------------------------------------------
+  const [courseCatalogue, setCourseCatalogue] =
+    useState<CourseMeta[]>(REQUIRED_COURSES);
 
   // Progress + payment state
   const [courseProgress, setCourseProgress] = useState<CourseProgress[]>([]);
@@ -346,7 +375,95 @@ export default function DashboardPage() {
     setHijriDate(getHijriDate());
   }, []);
 
-  // ---------- Fetch course progress ----------
+  // -------------------------------------------------------------------------
+  // FETCH DYNAMIC COURSE CATALOGUE
+  //
+  // We attempt to read the live list of courses from the database so the
+  // dashboard always reflects the current catalogue. If the table is
+  // missing, empty, or the query fails for any reason, we silently keep
+  // the hardcoded fallback — the UI stays fully functional.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchCatalogue = async () => {
+      try {
+        // Primary: `courses` table with `slug` + `display_name`.
+        const { data, error } = await supabase
+          .from('courses')
+          .select('slug, display_name, order_index')
+          .order('order_index', { ascending: true });
+
+        if (cancelled) return;
+
+        if (error) {
+          // Fallback attempt: `books` table with `slug` + `title`.
+          const fallback = await supabase
+            .from('books')
+            .select('slug, title');
+
+          if (cancelled) return;
+
+          if (fallback.error || !fallback.data || fallback.data.length === 0) {
+            console.warn(
+              '[Dashboard] courses/books fetch failed — using fallback catalogue.',
+              error.message,
+              fallback.error?.message
+            );
+            return;
+          }
+
+          const mapped = (fallback.data as Array<Record<string, any>>)
+            .map((row) => ({
+              slug: String(row.slug ?? ''),
+              displayName: String(row.title ?? row.slug ?? ''),
+            }))
+            .filter((c) => c.slug !== '');
+
+          if (mapped.length > 0) {
+            setCourseCatalogue(mapped);
+          }
+          return;
+        }
+
+        if (!data || data.length === 0) {
+          console.warn(
+            '[Dashboard] courses table returned no rows — using fallback catalogue.'
+          );
+          return;
+        }
+
+        const mapped = (data as Array<Record<string, any>>)
+          .map((row) => ({
+            slug: String(row.slug ?? ''),
+            displayName: String(row.display_name ?? row.slug ?? ''),
+          }))
+          .filter((c) => c.slug !== '');
+
+        if (mapped.length > 0) {
+          setCourseCatalogue(mapped);
+        }
+      } catch (err) {
+        console.warn(
+          '[Dashboard] catalogue fetch unexpected error — using fallback:',
+          readErrorMessage(err)
+        );
+      }
+    };
+
+    fetchCatalogue();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // FETCH COURSE PROGRESS
+  //
+  // Depends on both `user.id` and the current `courseCatalogue`. If the
+  // catalogue is later replaced with the live list, progress recomputes
+  // against the new slug set.
+  // -------------------------------------------------------------------------
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
@@ -354,7 +471,7 @@ export default function DashboardPage() {
     const fetchProgress = async () => {
       setProgressLoading(true);
       try {
-        const slugs = REQUIRED_COURSES.map((c) => c.slug);
+        const slugs = courseCatalogue.map((c) => c.slug);
 
         const { data, error } = await supabase
           .from('quiz_results')
@@ -369,18 +486,20 @@ export default function DashboardPage() {
             '[Dashboard] progress query error:',
             error.message || error
           );
-          setCourseProgress(buildCourseProgress([]));
+          setCourseProgress(buildCourseProgress([], courseCatalogue));
           return;
         }
 
-        setCourseProgress(buildCourseProgress((data ?? []) as any[]));
+        setCourseProgress(
+          buildCourseProgress((data ?? []) as any[], courseCatalogue)
+        );
       } catch (err) {
         if (!cancelled) {
           console.error(
             '[Dashboard] progress unexpected error:',
             readErrorMessage(err)
           );
-          setCourseProgress(buildCourseProgress([]));
+          setCourseProgress(buildCourseProgress([], courseCatalogue));
         }
       } finally {
         if (!cancelled) setProgressLoading(false);
@@ -391,7 +510,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [user?.id, courseCatalogue]);
 
   // ---------- Fetch payment status ----------
   useEffect(() => {
@@ -579,17 +698,27 @@ export default function DashboardPage() {
   // -------------------------------------------------------------------------
   const isPaymentApproved = paymentStatus === 'approved';
 
-  const passedCount = courseProgress.filter((c) => c.status === 'passed').length;
-  const allCoursesPassed = passedCount === REQUIRED_COURSES.length;
+  // Total number of courses comes from the live catalogue (falls back to 4).
+  const totalCoursesCount = courseCatalogue.length;
 
-  const overallProgressPct = Math.round(
-    (courseProgress.reduce(
-      (acc, c) => acc + Math.min(c.bestPercent, PASS_THRESHOLD_PERCENT),
-      0
-    ) /
-      (REQUIRED_COURSES.length * PASS_THRESHOLD_PERCENT)) *
-      100
-  );
+  const passedCount = courseProgress.filter(
+    (c) => c.status === 'passed'
+  ).length;
+
+  const allCoursesPassed =
+    totalCoursesCount > 0 && passedCount === totalCoursesCount;
+
+  const overallProgressPct =
+    totalCoursesCount > 0
+      ? Math.round(
+          (courseProgress.reduce(
+            (acc, c) => acc + Math.min(c.bestPercent, PASS_THRESHOLD_PERCENT),
+            0
+          ) /
+            (totalCoursesCount * PASS_THRESHOLD_PERCENT)) *
+            100
+        )
+      : 0;
 
   // -------------------------------------------------------------------------
   // Loading state — shown while auth is being verified or user is unknown.
@@ -828,7 +957,7 @@ export default function DashboardPage() {
                   የትምህርት ሂደት
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {passedCount} / {REQUIRED_COURSES.length} ኪታቦች ተጠናቅቀዋል
+                  {passedCount} / {totalCoursesCount} ኪታቦች ተጠናቅቀዋል
                 </p>
               </div>
             </div>
@@ -1028,7 +1157,7 @@ export default function DashboardPage() {
                       ሰርቲፊኬትዎን ለማግኘት አራቱንም ኪታቦች በ
                       {PASS_THRESHOLD_PERCENT}% እና ከዚያ በላይ
                       ማጠናቀቅ ያስፈልግዎታል። አሁን {passedCount} /{' '}
-                      {REQUIRED_COURSES.length} ኪታቦች ተጠናቅቀዋል።
+                      {totalCoursesCount} ኪታቦች ተጠናቅቀዋል።
                     </p>
                     <Link
                       href="/courses"
