@@ -326,11 +326,6 @@ export default function AdminStudentsPage() {
 
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
-
-  // -------------------------------------------------------------------------
-  // DEBUG: exact raw error message state.
-  // Whatever Supabase or the runtime throws will be surfaced here verbatim.
-  // -------------------------------------------------------------------------
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
@@ -400,12 +395,23 @@ export default function AdminStudentsPage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // 2. SAFE DATA LOAD — with exact error surfacing
+  // 2. SAFE DATA LOAD
   //
-  //    Two independent fetches:
-  //      A) profiles     — REQUIRED. On error we surface the raw message.
-  //      B) quiz_results — OPTIONAL. On error we surface the raw message
-  //                        but still render every student with 0 progress.
+  //    FIX for "Profiles Error: column profiles.created_at does not exist
+  //    (Code: 42703)":
+  //
+  //      → The previous query called `.order('created_at', ...)` which
+  //        forces PostgREST to reference the column server-side. If your
+  //        schema doesn't have `created_at`, the whole query fails.
+  //
+  //    STRATEGY:
+  //      1. Fetch `select('*')` with NO `.order()` — that never references
+  //         a specific column name, so missing columns can't break it.
+  //      2. Map each row defensively, accepting whatever timestamp-like
+  //         field the row actually has (created_at, inserted_at,
+  //         registered_at, updated_at), falling back to null.
+  //      3. `phone` is also optional — missing value becomes an empty
+  //         string and the UI renders "—".
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
@@ -414,16 +420,11 @@ export default function AdminStudentsPage() {
     // ---- A) PROFILES (required) ----
     let profiles: ProfileRow[] = [];
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // No .order() here — that's the fix for Code 42703.
+      const { data, error } = await supabase.from('profiles').select('*');
 
       if (error) {
-        // Full raw error to console for DevTools inspection.
         console.error('DEBUG_SUPABASE_ERROR:', error);
-
-        // Exact message + code surfaced on screen.
         setErrorMessage(
           `Profiles Error: ${error.message} (Code: ${error.code ?? 'N/A'})`
         );
@@ -431,14 +432,32 @@ export default function AdminStudentsPage() {
         return;
       }
 
-      profiles = ((data ?? []) as Array<Record<string, any>>).map((p) => ({
-        id: String(p.id ?? ''),
-        full_name: (p.full_name as string | null) ?? null,
-        phone: (p.phone as string | null) ?? null,
-        email: (p.email as string | null) ?? null,
-        role: (p.role as string | null) ?? null,
-        created_at: (p.created_at as string | null) ?? null,
-      }));
+      profiles = ((data ?? []) as Array<Record<string, any>>).map((p) => {
+        // Accept any of the common timestamp column names, or null.
+        const timestamp =
+          (p.created_at as string | null | undefined) ??
+          (p.inserted_at as string | null | undefined) ??
+          (p.registered_at as string | null | undefined) ??
+          (p.updated_at as string | null | undefined) ??
+          null;
+
+        return {
+          id: String(p.id ?? ''),
+          full_name: (p.full_name as string | null) ?? null,
+          phone: (p.phone as string | null) ?? null,
+          email: (p.email as string | null) ?? null,
+          role: (p.role as string | null) ?? null,
+          created_at: timestamp,
+        };
+      });
+
+      // Sort client-side by whatever timestamp we found (most recent first).
+      // Students with no timestamp sink to the bottom.
+      profiles.sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
     } catch (err) {
       console.error('DEBUG_SUPABASE_ERROR:', err);
       setErrorMessage(`Profiles Exception: ${describeError(err)}`);
@@ -455,11 +474,7 @@ export default function AdminStudentsPage() {
         .order('created_at', { ascending: false });
 
       if (error) {
-        // Log the full raw error object for DevTools.
         console.error('DEBUG_SUPABASE_ERROR:', error);
-
-        // Exact quiz fetch error surfaced on screen. We do NOT stop the
-        // page — the student list still renders below the alert.
         setErrorMessage(
           `Quiz Fetch Error: ${error.message} (Code: ${error.code ?? 'N/A'})`
         );
@@ -785,7 +800,6 @@ export default function AdminStudentsPage() {
         </div>
 
         {/* ---------- DEBUG ERROR BANNER ---------- */}
-        {/* Displays the exact Supabase error message on screen. */}
         {errorMessage && (
           <div
             role="alert"
