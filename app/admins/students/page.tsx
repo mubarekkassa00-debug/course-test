@@ -16,7 +16,6 @@ import {
   Search,
   Download,
   CheckCircle,
-  XCircle,
   BookOpen,
   Phone,
   Mail,
@@ -198,7 +197,6 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
     });
   }
 
-  // Most-recent activity first
   breakdowns.sort((a, b) => {
     const ta = a.lastDate ? new Date(a.lastDate).getTime() : 0;
     const tb = b.lastDate ? new Date(b.lastDate).getTime() : 0;
@@ -233,17 +231,20 @@ function downloadCSV(rows: StudentRow[]) {
   const lines: string[] = [headers.join(',')];
 
   for (const r of rows) {
-    const details = r.breakdown
-      .map((b) => {
-        const lessonStr = b.lessons
-          .map(
-            (l) =>
-              `ደርስ ${l.lessonNumber}: ${l.score}/${l.total} (${l.percent}%)`
-          )
-          .join(' · ');
-        return `${b.courseName} [${lessonStr}]`;
-      })
-      .join(' || ');
+    const details =
+      r.breakdown.length > 0
+        ? r.breakdown
+            .map((b) => {
+              const lessonStr = b.lessons
+                .map(
+                  (l) =>
+                    `ደርስ ${l.lessonNumber}: ${l.score}/${l.total} (${l.percent}%)`
+                )
+                .join(' · ');
+              return `${b.courseName} [${lessonStr}]`;
+            })
+            .join(' || ')
+        : 'ምንም ፈተና አልተወሰደም';
 
     lines.push(
       [
@@ -287,6 +288,8 @@ export default function AdminStudentsPage() {
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  // Non-fatal notice (e.g. quiz data unavailable). UI still renders the table.
+  const [dataNotice, setDataNotice] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
@@ -308,6 +311,7 @@ export default function AdminStudentsPage() {
         if (cancelled) return;
 
         if (userErr || !user) {
+          console.error('Supabase Error:', userErr);
           router.replace('/login');
           return;
         }
@@ -321,7 +325,7 @@ export default function AdminStudentsPage() {
         if (cancelled) return;
 
         if (profileErr) {
-          console.error('[AdminStudents] profile lookup failed:', profileErr);
+          console.error('Supabase Error:', profileErr);
           setAuthLoading(false);
           return;
         }
@@ -334,7 +338,7 @@ export default function AdminStudentsPage() {
         setAuthLoading(false);
       } catch (err) {
         if (!cancelled) {
-          console.error('[AdminStudents] auth exception:', err);
+          console.error('Supabase Error:', err);
           setAuthError('ያልተጠበቀ ስህተት ተከስቷል።');
           setAuthLoading(false);
         }
@@ -348,138 +352,151 @@ export default function AdminStudentsPage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // 2. DATA LOAD — defensive, per-table isolation
+  // 2. SAFE DATA LOAD
+  //
+  //    Two completely independent fetches:
+  //      A) profiles   — REQUIRED. If this fails, show the error banner.
+  //      B) quiz_results — OPTIONAL. If this fails or returns nothing, we
+  //                        still render every student with 0% progress and
+  //                        a "ምንም ፈተና አልተወሰደም" fallback in the modal.
+  //
+  //    No relational joins are used — a simple `select('*')` on each table
+  //    keeps the queries resilient to missing foreign keys or strict RLS.
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
     setDataError(null);
+    setDataNotice(null);
 
+    // ---- A) PROFILES (required) ----
+    let profiles: ProfileRow[] = [];
     try {
-      // ---- profiles: try full select, fall back to minimal ----
-      let profiles: ProfileRow[] = [];
-
-      const fullSelect = await supabase
+      const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, phone, email, role, created_at')
+        .select('*')
         .order('created_at', { ascending: false });
 
-      if (!fullSelect.error) {
-        profiles = (fullSelect.data ?? []) as ProfileRow[];
-      } else {
-        console.warn(
-          '[AdminStudents] Full profiles select failed, retrying with minimal columns:',
-          fullSelect.error.message
+      if (error) {
+        console.error('Supabase Error:', error);
+        setDataError(
+          'የተማሪዎችን ዝርዝር ማግኘት አልተቻለም። እባክዎ በኋላ እንደገና ይሞክሩ።'
         );
-
-        const minimalSelect = await supabase
-          .from('profiles')
-          .select('id, full_name, email, role, created_at')
-          .order('created_at', { ascending: false });
-
-        if (minimalSelect.error) {
-          console.error(
-            '[AdminStudents] Minimal profiles select failed:',
-            minimalSelect.error
-          );
-          setDataError(
-            'የተማሪዎችን ዝርዝር ማግኘት አልተቻለም። እባክዎ በኋላ እንደገና ይሞክሩ።'
-          );
-          setDataLoading(false);
-          return;
-        }
-
-        profiles = (
-          (minimalSelect.data ?? []) as Omit<ProfileRow, 'phone'>[]
-        ).map((p) => ({ ...p, phone: null }));
+        setDataLoading(false);
+        return;
       }
 
-      // ---- quiz_results: isolated fetch ----
-      let quizRows: QuizRow[] = [];
-      const quizRes = await supabase
-        .from('quiz_results')
-        .select('user_id, course_id, score, total_questions, created_at')
-        .order('created_at', { ascending: false });
-
-      if (quizRes.error) {
-        console.warn(
-          '[AdminStudents] quiz_results fetch failed (continuing without):',
-          quizRes.error.message
-        );
-      } else {
-        quizRows = (quizRes.data ?? []) as QuizRow[];
-      }
-
-      // ---- index quiz rows by user ----
-      const quizzesByUser = new Map<string, QuizRow[]>();
-      for (const q of quizRows) {
-        const arr = quizzesByUser.get(q.user_id) ?? [];
-        arr.push(q);
-        quizzesByUser.set(q.user_id, arr);
-      }
-
-      // ---- compose student rows ----
-      const rows: StudentRow[] = profiles
-        .filter((p) => p.role !== 'admin')
-        .map((p) => {
-          const userQuizzes = quizzesByUser.get(p.id) ?? [];
-          const breakdown = buildBreakdown(userQuizzes);
-
-          const passedCount = breakdown.filter((b) => b.passed).length;
-          const totalCourses = REQUIRED_COURSES.length;
-
-          const progressPercent = Math.round(
-            (REQUIRED_COURSES.reduce((acc, c) => {
-              const b = breakdown.find((x) => x.courseId === c.slug);
-              const best = b ? b.bestPercent : 0;
-              return acc + Math.min(best, PASS_THRESHOLD_PERCENT);
-            }, 0) /
-              (totalCourses * PASS_THRESHOLD_PERCENT)) *
-              100
-          );
-
-          const percents = userQuizzes.map((q) =>
-            computePercent(q.score, q.total_questions)
-          );
-          const averageScore =
-            percents.length > 0
-              ? Math.round(
-                  percents.reduce((a, b) => a + b, 0) / percents.length
-                )
-              : 0;
-
-          const current = breakdown[0] ?? null;
-          const currentCourseName = current?.courseName ?? null;
-          const currentLessonNumber = current
-            ? current.lessons[current.lessons.length - 1]?.lessonNumber ?? null
-            : null;
-
-          return {
-            id: p.id,
-            fullName: p.full_name ?? 'ያልተጠቀሰ',
-            phone: p.phone ?? '',
-            email: p.email ?? '',
-            registeredAt: p.created_at,
-            role: p.role ?? 'student',
-            totalCourses,
-            passedCount,
-            progressPercent,
-            averageScore,
-            attemptsCount: userQuizzes.length,
-            currentCourseName,
-            currentLessonNumber,
-            breakdown,
-          };
-        });
-
-      setStudents(rows);
+      profiles = ((data ?? []) as Array<Record<string, any>>).map((p) => ({
+        id: String(p.id ?? ''),
+        full_name: (p.full_name as string | null) ?? null,
+        phone: (p.phone as string | null) ?? null,
+        email: (p.email as string | null) ?? null,
+        role: (p.role as string | null) ?? null,
+        created_at: (p.created_at as string | null) ?? null,
+      }));
     } catch (err) {
-      console.error('[AdminStudents] unexpected data load error:', err);
+      console.error('Supabase Error:', err);
       setDataError(
-        'ያልተጠበቀ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ።'
+        'የተማሪዎችን ዝርዝር ማግኘት አልተቻለም። እባክዎ በኋላ እንደገና ይሞክሩ።'
       );
-    } finally {
       setDataLoading(false);
+      return;
     }
+
+    // ---- B) QUIZ RESULTS (optional) ----
+    let quizRows: QuizRow[] = [];
+    try {
+      const { data, error } = await supabase
+        .from('quiz_results')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        // Log it, but DON'T kill the page. Show a soft notice instead.
+        console.error('Supabase Error:', error);
+        setDataNotice(
+          'የፈተና ውጤቶችን ማግኘት አልተቻለም። የተማሪዎች ዝርዝር ግን ይታያል።'
+        );
+        quizRows = [];
+      } else {
+        quizRows = ((data ?? []) as Array<Record<string, any>>).map((q) => ({
+          user_id: String(q.user_id ?? ''),
+          course_id: String(q.course_id ?? ''),
+          score: (q.score as number | null) ?? null,
+          total_questions: (q.total_questions as number | null) ?? null,
+          created_at: (q.created_at as string | null) ?? null,
+        }));
+      }
+    } catch (err) {
+      console.error('Supabase Error:', err);
+      setDataNotice(
+        'የፈተና ውጤቶችን ማግኘት አልተቻለም። የተማሪዎች ዝርዝር ግን ይታያል።'
+      );
+      quizRows = [];
+    }
+
+    // ---- Index quiz rows by user ----
+    const quizzesByUser = new Map<string, QuizRow[]>();
+    for (const q of quizRows) {
+      if (!q.user_id) continue;
+      const arr = quizzesByUser.get(q.user_id) ?? [];
+      arr.push(q);
+      quizzesByUser.set(q.user_id, arr);
+    }
+
+    // ---- Compose student rows ----
+    const rows: StudentRow[] = profiles
+      .filter((p) => p.role !== 'admin' && p.id)
+      .map((p) => {
+        const userQuizzes = quizzesByUser.get(p.id) ?? [];
+        const breakdown = buildBreakdown(userQuizzes);
+
+        const passedCount = breakdown.filter((b) => b.passed).length;
+        const totalCourses = REQUIRED_COURSES.length;
+
+        const progressPercent = Math.round(
+          (REQUIRED_COURSES.reduce((acc, c) => {
+            const b = breakdown.find((x) => x.courseId === c.slug);
+            const best = b ? b.bestPercent : 0;
+            return acc + Math.min(best, PASS_THRESHOLD_PERCENT);
+          }, 0) /
+            (totalCourses * PASS_THRESHOLD_PERCENT)) *
+            100
+        );
+
+        const percents = userQuizzes.map((q) =>
+          computePercent(q.score, q.total_questions)
+        );
+        const averageScore =
+          percents.length > 0
+            ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
+            : 0;
+
+        const current = breakdown[0] ?? null;
+        const currentCourseName = current?.courseName ?? null;
+        const currentLessonNumber = current
+          ? current.lessons[current.lessons.length - 1]?.lessonNumber ?? null
+          : null;
+
+        return {
+          id: p.id,
+          fullName: p.full_name ?? 'ያልተጠቀሰ',
+          phone: p.phone ?? '',
+          email: p.email ?? '',
+          registeredAt: p.created_at,
+          role: p.role ?? 'student',
+          totalCourses,
+          passedCount,
+          progressPercent,
+          averageScore,
+          attemptsCount: userQuizzes.length,
+          currentCourseName,
+          currentLessonNumber,
+          breakdown,
+        };
+      });
+
+    setStudents(rows);
+    setDataLoading(false);
   }, []);
 
   useEffect(() => {
@@ -720,7 +737,7 @@ export default function AdminStudentsPage() {
           </button>
         </div>
 
-        {/* ---------- Error banner ---------- */}
+        {/* ---------- Error banner (fatal: profiles failed) ---------- */}
         {dataError && (
           <div
             role="alert"
@@ -728,6 +745,17 @@ export default function AdminStudentsPage() {
           >
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
             <p className="flex-1">{dataError}</p>
+          </div>
+        )}
+
+        {/* ---------- Notice banner (non-fatal: quizzes failed) ---------- */}
+        {!dataError && dataNotice && (
+          <div
+            role="status"
+            className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-300"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <p className="flex-1">{dataNotice}</p>
           </div>
         )}
 
@@ -820,10 +848,12 @@ export default function AdminStudentsPage() {
                       <td className="px-5 py-4">
                         <div className="flex flex-col">
                           <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">
-                            {s.averageScore}%
+                            {s.attemptsCount > 0 ? `${s.averageScore}%` : '—'}
                           </span>
                           <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                            {s.attemptsCount} ሙከራ
+                            {s.attemptsCount > 0
+                              ? `${s.attemptsCount} ሙከራ`
+                              : 'ምንም ፈተና አልተወሰደም'}
                           </span>
                         </div>
                       </td>
@@ -1067,7 +1097,12 @@ function StudentModal({
               label="የጨረሱት ኪታቦች"
               value={`${student.passedCount}/${student.totalCourses}`}
             />
-            <MiniStat label="አማካይ ነጥብ" value={`${student.averageScore}%`} />
+            <MiniStat
+              label="አማካይ ነጥብ"
+              value={
+                student.attemptsCount > 0 ? `${student.averageScore}%` : '—'
+              }
+            />
             <MiniStat
               label="ጠቅላላ ሙከራዎች"
               value={String(student.attemptsCount)}
@@ -1103,7 +1138,7 @@ function StudentModal({
               <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 p-6 text-center">
                 <BookOpen className="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600 mb-2" />
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  እስካሁን ምንም ፈተና አልወሰዱም።
+                  ምንም ፈተና አልተወሰደም።
                 </p>
               </div>
             ) : (
