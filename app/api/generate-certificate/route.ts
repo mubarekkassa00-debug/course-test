@@ -13,8 +13,13 @@
 //           attempt recorded.
 //        c) A final comprehensive exam attempt must exist
 //           (`is_final_exam = true`).
-//        d) The aggregate score across all completed quizzes + the final
-//           exam must be >= 50%.
+//        d) The SYSTEM-WIDE score must be >= 50%:
+//             overallPercent =
+//               Math.round((totalEarnedPoints / totalSystemPossibleQuestions) * 100)
+//           where `totalSystemPossibleQuestions` is the sum of every active
+//           lesson's question count across the whole curriculum (plus the
+//           final exam when applicable). This closes the loophole where a
+//           student completing 1 lesson could otherwise hit 50% locally.
 //   4. Resolve the student's display name using this strict priority:
 //        a) profiles.full_name
 //        b) user_metadata.full_name → name → display_name → username
@@ -65,7 +70,7 @@ const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   },
 ];
 
-/** Minimum combined score percentage required to pass. */
+/** Minimum SYSTEM-WIDE score percentage required to pass. */
 const PASS_THRESHOLD_PERCENT = 50;
 
 /** Supabase Storage bucket that holds the generated PDFs. */
@@ -78,6 +83,13 @@ const PAGE_H = 595.28;
 /** Canonical Amharic message returned on eligibility failure. */
 const NOT_ELIGIBLE_MESSAGE =
   'ሁሉንም ደርሶች እና የማጠቃለያ ፈተና አጠናቀው ከ 50% በላይ ማምጣት አለብዎት።';
+
+/**
+ * Default question count used when the `lessons` table does not expose a
+ * per-lesson question count. Keeps the denominator meaningful instead of
+ * collapsing to zero.
+ */
+const DEFAULT_QUESTIONS_PER_LESSON = 10;
 
 // ---------------------------------------------------------------------------
 // Supabase service-role client (lazy, cached) — anon-key fallback
@@ -327,28 +339,177 @@ async function fetchProfileFullName(
 }
 
 // ---------------------------------------------------------------------------
-// Eligibility evaluation — fetches lessons, quiz_results, and applies rules
+// Curriculum loader — fetches all active lessons with their question counts
+// ---------------------------------------------------------------------------
 //
-// DATA MODEL ASSUMPTIONS
-// ----------------------
-//   `lessons` table (optional):  { id, course_id (or book_id), is_active }
-//   `quiz_results` table:        { user_id, course_id, lesson_id?,
-//                                  score, total_questions, is_final_exam }
+// Returns:
+//   • lessonsByCourse     → Map<courseSlug, Set<lessonId>>
+//   • lessonMaxById       → Map<lessonId, maxQuestions>
+//   • perCourseMax        → Map<courseSlug, totalMaxQuestions>
+//   • totalSystemMax      → sum of maxQuestions across every active lesson
+//   • totalActiveLessons  → count of every active lesson
 //
-// The `course_id` in `quiz_results` must match one of the four slugs in
-// `REQUIRED_COURSES` (usul_al_thalatha, arbain, shurut_as_salah, urjuzat).
+// Multiple column-name fallbacks are attempted so the function never throws
+// a hard failure if the schema varies slightly between environments.
+// ---------------------------------------------------------------------------
+
+interface CurriculumData {
+  lessonsByCourse: Map<string, Set<string>>;
+  lessonMaxById: Map<string, number>;
+  perCourseMax: Map<string, number>;
+  totalSystemMax: number;
+  totalActiveLessons: number;
+}
+
+async function fetchCurriculumData(
+  supabase: SupabaseClient
+): Promise<CurriculumData> {
+  const lessonsByCourse = new Map<string, Set<string>>();
+  const lessonMaxById = new Map<string, number>();
+  const perCourseMax = new Map<string, number>();
+  let totalSystemMax = 0;
+  let totalActiveLessons = 0;
+
+  let lessonsData: Array<Record<string, any>> = [];
+
+  // ---- Attempt 1: modern schema with `total_questions` ----
+  try {
+    const t1 = await supabase
+      .from('lessons')
+      .select('id, course_id, is_active, total_questions');
+
+    if (!t1.error) {
+      lessonsData = (t1.data ?? []) as Array<Record<string, any>>;
+    } else {
+      console.warn(
+        '[generate-certificate] lessons select (id, course_id, is_active, total_questions) failed:',
+        t1.error.message
+      );
+
+      // ---- Attempt 2: `questions_count` alias ----
+      const t2 = await supabase
+        .from('lessons')
+        .select('id, course_id, is_active, questions_count');
+
+      if (!t2.error) {
+        lessonsData = ((t2.data ?? []) as Array<Record<string, any>>).map(
+          (r) => ({ ...r, total_questions: r.questions_count })
+        );
+      } else {
+        console.warn(
+          '[generate-certificate] lessons select (id, course_id, is_active, questions_count) failed:',
+          t2.error.message
+        );
+
+        // ---- Attempt 3: no is_active, with total_questions ----
+        const t3 = await supabase
+          .from('lessons')
+          .select('id, course_id, total_questions');
+
+        if (!t3.error) {
+          lessonsData = (t3.data ?? []) as Array<Record<string, any>>;
+        } else {
+          console.warn(
+            '[generate-certificate] lessons select (id, course_id, total_questions) failed:',
+            t3.error.message
+          );
+
+          // ---- Attempt 4: no question count, use default ----
+          const t4 = await supabase
+            .from('lessons')
+            .select('id, course_id, is_active');
+
+          if (!t4.error) {
+            lessonsData = ((t4.data ?? []) as Array<Record<string, any>>).map(
+              (r) => ({ ...r, total_questions: DEFAULT_QUESTIONS_PER_LESSON })
+            );
+          } else {
+            console.warn(
+              '[generate-certificate] lessons select (id, course_id, is_active) failed:',
+              t4.error.message
+            );
+
+            // ---- Attempt 5: legacy `book_id` ----
+            const t5 = await supabase.from('lessons').select('id, book_id');
+
+            if (!t5.error) {
+              lessonsData = ((t5.data ?? []) as Array<Record<string, any>>).map(
+                (r) => ({
+                  id: r.id,
+                  course_id: r.book_id,
+                  is_active: true,
+                  total_questions: DEFAULT_QUESTIONS_PER_LESSON,
+                })
+              );
+            } else {
+              console.error(
+                '[generate-certificate] lessons select (id, book_id) failed (non-fatal):',
+                t5.error.message
+              );
+              lessonsData = [];
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(
+      '[generate-certificate] lessons fetch unexpected error:',
+      err instanceof Error ? err.message : String(err)
+    );
+    lessonsData = [];
+  }
+
+  // ---- Aggregate rows ----
+  for (const row of lessonsData) {
+    if (row.is_active === false) continue;
+
+    const courseId = String(row.course_id ?? row.book_id ?? '');
+    const lessonId = String(row.id ?? '');
+    if (!courseId || !lessonId) continue;
+
+    const rawMax = Number(
+      row.total_questions ?? row.questions_count ?? row.question_count
+    );
+    const lessonMax =
+      Number.isFinite(rawMax) && rawMax > 0
+        ? rawMax
+        : DEFAULT_QUESTIONS_PER_LESSON;
+
+    const set = lessonsByCourse.get(courseId) ?? new Set<string>();
+    set.add(lessonId);
+    lessonsByCourse.set(courseId, set);
+
+    lessonMaxById.set(lessonId, lessonMax);
+    perCourseMax.set(courseId, (perCourseMax.get(courseId) ?? 0) + lessonMax);
+
+    totalSystemMax += lessonMax;
+    totalActiveLessons += 1;
+  }
+
+  return {
+    lessonsByCourse,
+    lessonMaxById,
+    perCourseMax,
+    totalSystemMax,
+    totalActiveLessons,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Eligibility evaluation — fetches curriculum + quiz_results, applies rules
 //
 // RULES ENFORCED (all must pass):
 //   1. Every required course must have at least one quiz attempt.
 //   2. Every active lesson within each required course must have an attempt.
 //   3. A final comprehensive exam attempt must exist (is_final_exam = true).
-//   4. Aggregate score across all completed lessons + the final exam ≥ 50%.
+//   4. SYSTEM-WIDE score must be >= 50%:
+//        overallPercent = (totalEarnedPoints / totalSystemPossibleQuestions) * 100
 //
-// The previous version of this function had a loophole: it treated
-// `lesson_id ?? course_id ?? course_slug` as a single flat identifier, so a
-// student with 1 quiz attempt on 1 course could appear "fully complete".
-// The rewritten logic groups attempts by course AND by lesson, so every
-// required course and every lesson is checked independently.
+// The previous version used the student's own attempt totals as the
+// denominator, which allowed a single completed lesson (e.g. 5/10) to reach
+// 50% locally and unlock the certificate. This version enforces the true
+// curriculum-wide percentage instead.
 // ---------------------------------------------------------------------------
 
 interface EligibilityResult {
@@ -360,111 +521,28 @@ interface EligibilityResult {
     hasFinalExam: boolean;
     finalExamPercent: number;
     combinedPercent: number;
+    totalEarnedPoints: number;
+    totalSystemPossibleQuestions: number;
   };
-}
-
-/**
- * Read the `lessons` table and group active lessons by their parent course.
- *
- * Returns `{ lessonsByCourse, totalActiveLessons, ok }`:
- *   • lessonsByCourse: Map<courseSlug, Set<lessonId>>
- *   • totalActiveLessons: sum of all active lesson ids across every course
- *   • ok: true when the table could be read (even if empty)
- *
- * Multiple column-name fallbacks are attempted so the function never throws
- * a hard failure if the schema varies slightly between environments.
- */
-async function fetchActiveLessonsByCourse(
-  supabase: SupabaseClient
-): Promise<{
-  lessonsByCourse: Map<string, Set<string>>;
-  totalActiveLessons: number;
-  ok: boolean;
-}> {
-  const lessonsByCourse = new Map<string, Set<string>>();
-  let totalActiveLessons = 0;
-
-  // ---- Attempt 1: modern schema (id, course_id, is_active) ----
-  let lessonsData: Array<Record<string, any>> = [];
-  let readOk = false;
-
-  try {
-    const primary = await supabase
-      .from('lessons')
-      .select('id, course_id, is_active');
-
-    if (!primary.error) {
-      lessonsData = (primary.data ?? []) as Array<Record<string, any>>;
-      readOk = true;
-    } else {
-      console.warn(
-        '[generate-certificate] lessons select (id, course_id, is_active) failed:',
-        primary.error.message
-      );
-
-      // ---- Attempt 2: no is_active column ----
-      const fb1 = await supabase.from('lessons').select('id, course_id');
-      if (!fb1.error) {
-        lessonsData = (fb1.data ?? []) as Array<Record<string, any>>;
-        readOk = true;
-      } else {
-        console.warn(
-          '[generate-certificate] lessons select (id, course_id) failed:',
-          fb1.error.message
-        );
-
-        // ---- Attempt 3: legacy `book_id` instead of `course_id` ----
-        const fb2 = await supabase.from('lessons').select('id, book_id');
-        if (!fb2.error) {
-          lessonsData = ((fb2.data ?? []) as Array<Record<string, any>>).map(
-            (r) => ({ ...r, course_id: r.book_id })
-          );
-          readOk = true;
-        } else {
-          console.error(
-            '[generate-certificate] lessons select (id, book_id) failed (non-fatal):',
-            fb2.error.message
-          );
-        }
-      }
-    }
-  } catch (err) {
-    console.error(
-      '[generate-certificate] lessons fetch unexpected error:',
-      err instanceof Error ? err.message : String(err)
-    );
-  }
-
-  // ---- Group by course, respecting `is_active` when present ----
-  for (const row of lessonsData) {
-    if (row.is_active === false) continue; // skip explicitly deactivated rows
-
-    const courseId = String(row.course_id ?? row.book_id ?? '');
-    const lessonId = String(row.id ?? '');
-    if (!courseId || !lessonId) continue;
-
-    const set = lessonsByCourse.get(courseId) ?? new Set<string>();
-    set.add(lessonId);
-    lessonsByCourse.set(courseId, set);
-    totalActiveLessons += 1;
-  }
-
-  return { lessonsByCourse, totalActiveLessons, ok: readOk };
 }
 
 async function evaluateEligibility(
   supabase: SupabaseClient,
   userId: string
 ): Promise<EligibilityResult> {
-  // ---- 1. Fetch all active lessons, grouped by parent course ----
-  const { lessonsByCourse, totalActiveLessons, ok: lessonsReadOk } =
-    await fetchActiveLessonsByCourse(supabase);
+  // ---- 1. Fetch curriculum data (lessons + question counts) ----
+  const curriculum = await fetchCurriculumData(supabase);
+  const {
+    lessonsByCourse,
+    perCourseMax,
+    totalSystemMax,
+  } = curriculum;
 
-  if (!lessonsReadOk) {
-    console.warn(
-      '[generate-certificate] lessons table unavailable — falling back to ' +
-        'a "1 attempt per course" heuristic for lesson completion.'
-    );
+  // Restrict the system denominator to the four REQUIRED courses only, so
+  // optional/decorative lessons outside the program don't inflate the max.
+  let totalRequiredMax = 0;
+  for (const course of REQUIRED_COURSES) {
+    totalRequiredMax += perCourseMax.get(course.slug) ?? 0;
   }
 
   // ---- 2. Fetch the student's quiz attempts ----
@@ -480,11 +558,13 @@ async function evaluateEligibility(
         eligible: false,
         reason: `የፈተና ውጤቶችን ማግኘት አልተቻለም: ${error.message}`,
         details: {
-          totalLessons: totalActiveLessons,
+          totalLessons: curriculum.totalActiveLessons,
           completedLessons: 0,
           hasFinalExam: false,
           finalExamPercent: 0,
           combinedPercent: 0,
+          totalEarnedPoints: 0,
+          totalSystemPossibleQuestions: totalRequiredMax,
         },
       };
     }
@@ -497,11 +577,13 @@ async function evaluateEligibility(
         err instanceof Error ? err.message : String(err)
       }`,
       details: {
-        totalLessons: totalActiveLessons,
+        totalLessons: curriculum.totalActiveLessons,
         completedLessons: 0,
         hasFinalExam: false,
         finalExamPercent: 0,
         combinedPercent: 0,
+        totalEarnedPoints: 0,
+        totalSystemPossibleQuestions: totalRequiredMax,
       },
     };
   }
@@ -509,13 +591,9 @@ async function evaluateEligibility(
   // ---- 3. Group attempts by COURSE → LESSON ----
   //
   //   attemptsByCourse: Map<courseSlug, Map<lessonKey, { score, total }>>
-  //     → best attempt per lesson per course
+  //     → best attempt per lesson per course (retakes don't double-count)
   //
   //   A separate slot tracks the best final-exam attempt.
-  //
-  //   A `lessonKey` fallback of `courseSlug` is used only when the row has
-  //   no explicit `lesson_id` — legacy rows that treated the whole course
-  //   as a single quiz.
   const attemptsByCourse = new Map<
     string,
     Map<string, { score: number; total: number }>
@@ -563,12 +641,12 @@ async function evaluateEligibility(
     attempted: boolean;
     completedLessons: number;
     totalLessons: number;
-    aggregatePercent: number;
+    courseMax: number;
+    earnedScore: number;
   }
 
   const perCourseStats: CourseStat[] = [];
-  let sumScoreAll = 0;
-  let sumTotalAll = 0;
+  let totalEarnedPoints = 0;
   let completedLessonsAll = 0;
 
   for (const course of REQUIRED_COURSES) {
@@ -591,18 +669,13 @@ async function evaluateEligibility(
 
     // Sum the best scores for every completed lesson in this course.
     let courseScore = 0;
-    let courseTotal = 0;
     if (courseMap) {
-      for (const { score, total } of courseMap.values()) {
+      for (const { score } of courseMap.values()) {
         courseScore += score;
-        courseTotal += total;
       }
     }
 
-    const coursePercent =
-      courseTotal > 0
-        ? Math.round((courseScore / courseTotal) * 100)
-        : 0;
+    const courseMax = perCourseMax.get(course.slug) ?? 0;
 
     perCourseStats.push({
       slug: course.slug,
@@ -610,11 +683,11 @@ async function evaluateEligibility(
       attempted: completedCount > 0,
       completedLessons: completedCount,
       totalLessons: effectiveRequired,
-      aggregatePercent: coursePercent,
+      courseMax,
+      earnedScore: courseScore,
     });
 
-    sumScoreAll += courseScore;
-    sumTotalAll += courseTotal;
+    totalEarnedPoints += courseScore;
     completedLessonsAll += completedCount;
   }
 
@@ -625,15 +698,19 @@ async function evaluateEligibility(
       ? Math.round((bestFinalExam.score / bestFinalExam.total) * 100)
       : 0;
 
+  let totalSystemPossibleQuestions = totalRequiredMax;
   if (bestFinalExam) {
-    sumScoreAll += bestFinalExam.score;
-    sumTotalAll += bestFinalExam.total;
+    totalEarnedPoints += bestFinalExam.score;
+    totalSystemPossibleQuestions += bestFinalExam.total;
   }
 
+  // ---- 6. Compute the strict system-wide percentage ----
   const combinedPercent =
-    sumTotalAll > 0 ? Math.round((sumScoreAll / sumTotalAll) * 100) : 0;
+    totalSystemPossibleQuestions > 0
+      ? Math.round((totalEarnedPoints / totalSystemPossibleQuestions) * 100)
+      : 0;
 
-  // ---- 6. Enforce every rule ----
+  // ---- 7. Enforce every rule ----
   const missingParts: string[] = [];
 
   // Rule A — every required course must have at least one attempt.
@@ -662,10 +739,10 @@ async function evaluateEligibility(
     missingParts.push('የማጠቃለያ ፈተናውን ማጠናቀቅ ያስፈልጋል።');
   }
 
-  // Rule D — aggregate score ≥ 50%.
+  // Rule D — system-wide score ≥ 50%.
   if (combinedPercent < PASS_THRESHOLD_PERCENT) {
     missingParts.push(
-      `አጠቃላይ ውጤት ቢያንስ ${PASS_THRESHOLD_PERCENT}% መሆን አለበት (አሁን ${combinedPercent}%)።`
+      `እስካሁን ያገኙት ነጥብ ${totalEarnedPoints} / ${totalSystemPossibleQuestions} (${combinedPercent}%) ነው። ሰርተፊኬት ለማግኘት ከጠቅላላው ቢያንስ ${PASS_THRESHOLD_PERCENT}% ማምጣት አለብዎት።`
     );
   }
 
@@ -679,7 +756,7 @@ async function evaluateEligibility(
     hasFinalExam &&
     scoreOk;
 
-  // ---- 7. Return ----
+  // ---- 8. Return ----
   //
   // `totalLessons` reflects the sum of expected lessons across all required
   // courses. When the `lessons` table is unavailable, `effectiveRequired`
@@ -700,6 +777,8 @@ async function evaluateEligibility(
       hasFinalExam,
       finalExamPercent,
       combinedPercent,
+      totalEarnedPoints,
+      totalSystemPossibleQuestions,
     },
   };
 }
@@ -956,7 +1035,7 @@ export async function POST(request: Request) {
     );
   }
 
-  // ---------- 5. Evaluate lessons + final exam + combined score ----------
+  // ---------- 5. Evaluate lessons + final exam + system-wide score ----------
   const eligibility = await evaluateEligibility(supabase, userId);
 
   if (!eligibility.eligible) {

@@ -8,8 +8,12 @@
 //      (usul_al_thalatha, arbain, shurut_as_salah, urjuzat).
 //   2. Every active lesson within each required course must have an attempt.
 //   3. The final comprehensive exam (`is_final_exam = true`) must be completed.
-//   4. The combined score across all required course quizzes + the final
-//      exam must be >= 50%.
+//   4. The SYSTEM-WIDE score must be >= 50%:
+//         overallPercent = (totalEarnedScore / totalCurriculumMaxQuestions) * 100
+//      where `totalCurriculumMaxQuestions` is the sum of every active
+//      lesson's question count across the whole curriculum (plus the
+//      final exam when applicable). This guarantees that completing a
+//      single lesson (e.g. 5/100 points) cannot unlock the certificate.
 //
 // Behaviour:
 //   • On mount, we fetch the eligibility snapshot from Supabase so the
@@ -50,7 +54,7 @@ const supabase = createBrowserClient(
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Minimum combined score (lessons + final exam) required to be eligible. */
+/** Minimum SYSTEM-WIDE score (earned / total curriculum) required. */
 const PASS_THRESHOLD_PERCENT = 50;
 
 /**
@@ -82,6 +86,13 @@ const MISSING_COURSES_REASON =
   'አራቱንም ኪታቦች (ዩሱል አል-ሠላሠ፣ አርባኢን፣ ሹሩጥ አስ-ሶላህ፣ ኡርጁዘህ) ማጠናቀቅ አለብዎት።';
 
 /**
+ * Default question count used when the `lessons` table does not expose a
+ * per-lesson question count. Keeps the denominator meaningful instead of
+ * collapsing to zero.
+ */
+const DEFAULT_QUESTIONS_PER_LESSON = 10;
+
+/**
  * Distinct prefix for every debug log emitted by this component.
  * Filter DevTools console by `[CERTIFICATE DEBUG]` to see only these.
  */
@@ -104,12 +115,20 @@ interface EligibilitySnapshot {
   completedLessons: number;
   hasFinalExam: boolean;
   finalExamPercent: number;
+  /**
+   * System-wide percentage: earned score / total curriculum max score × 100.
+   * This is the strict metric used for the ">= 50%" gate.
+   */
   combinedPercent: number;
   eligible: boolean;
   missingReasons: string[];
   /** Per-course completion detail (used to build richer missing reasons). */
   untouchedCourses: string[];
   incompleteCourses: string[];
+  /** Sum of every quiz score earned by the user across the required courses. */
+  totalEarnedScore: number;
+  /** Sum of every active lesson's question count across the required courses. */
+  totalCurriculumMax: number;
 }
 
 interface CertificateSuccessResponse {
@@ -199,72 +218,155 @@ function describeError(err: unknown): string {
 }
 
 /**
- * Fetch active lessons and group them by their parent course.
+ * Fetch all active lessons from the `lessons` table along with each
+ * lesson's question count, then aggregate:
+ *   • lessonsByCourse   → Map<courseSlug, Set<lessonId>>
+ *   • lessonMaxById     → Map<lessonId, maxQuestions>
+ *   • perCourseMax      → Map<courseSlug, totalMaxQuestions>
+ *   • totalMaxQuestions → sum of maxQuestions across all active lessons
+ *   • lessonsCount      → total number of active lessons
  *
- * Returns a Map<courseSlug, Set<lessonId>>. Multiple schema variants are
- * tried in order so a mismatch between environments never throws.
+ * Multiple schema variants are tried in order so a mismatch between
+ * environments never throws. When no question-count column is available,
+ * `DEFAULT_QUESTIONS_PER_LESSON` is used so the system-wide percent still
+ * has a meaningful denominator.
  */
-async function fetchActiveLessonsByCourse(): Promise<
-  Map<string, Set<string>>
-> {
+async function fetchCurriculumData(): Promise<{
+  lessonsByCourse: Map<string, Set<string>>;
+  lessonMaxById: Map<string, number>;
+  perCourseMax: Map<string, number>;
+  totalMaxQuestions: number;
+  lessonsCount: number;
+}> {
   const lessonsByCourse = new Map<string, Set<string>>();
+  const lessonMaxById = new Map<string, number>();
+  const perCourseMax = new Map<string, number>();
+  let totalMaxQuestions = 0;
+  let lessonsCount = 0;
 
   let rows: Array<Record<string, any>> = [];
 
-  // Attempt 1: (id, course_id, is_active)
+  // ---- Attempt 1: full modern schema with `total_questions` ----
   try {
-    const primary = await supabase
+    const t1 = await supabase
       .from('lessons')
-      .select('id, course_id, is_active');
+      .select('id, course_id, is_active, total_questions');
 
-    if (!primary.error) {
-      rows = (primary.data ?? []) as Array<Record<string, any>>;
+    if (!t1.error) {
+      rows = (t1.data ?? []) as Array<Record<string, any>>;
     } else {
       console.warn(
-        '[CertificateButton] lessons select (id, course_id, is_active) failed:',
-        primary.error.message
+        '[CertificateButton] lessons select (id, course_id, is_active, total_questions) failed:',
+        t1.error.message
       );
 
-      // Attempt 2: (id, course_id)
-      const fb1 = await supabase.from('lessons').select('id, course_id');
-      if (!fb1.error) {
-        rows = (fb1.data ?? []) as Array<Record<string, any>>;
+      // ---- Attempt 2: `questions_count` alias ----
+      const t2 = await supabase
+        .from('lessons')
+        .select('id, course_id, is_active, questions_count');
+
+      if (!t2.error) {
+        rows = ((t2.data ?? []) as Array<Record<string, any>>).map((r) => ({
+          ...r,
+          total_questions: r.questions_count,
+        }));
       } else {
         console.warn(
-          '[CertificateButton] lessons select (id, course_id) failed:',
-          fb1.error.message
+          '[CertificateButton] lessons select (id, course_id, is_active, questions_count) failed:',
+          t2.error.message
         );
 
-        // Attempt 3: (id, book_id) legacy
-        const fb2 = await supabase.from('lessons').select('id, book_id');
-        if (!fb2.error) {
-          rows = ((fb2.data ?? []) as Array<Record<string, any>>).map(
-            (r) => ({ ...r, course_id: r.book_id })
-          );
+        // ---- Attempt 3: no is_active, with total_questions ----
+        const t3 = await supabase
+          .from('lessons')
+          .select('id, course_id, total_questions');
+
+        if (!t3.error) {
+          rows = (t3.data ?? []) as Array<Record<string, any>>;
         } else {
-          console.error(
-            'DEBUG_SUPABASE_ERROR (lessons, non-fatal):',
-            fb2.error
+          console.warn(
+            '[CertificateButton] lessons select (id, course_id, total_questions) failed:',
+            t3.error.message
           );
+
+          // ---- Attempt 4: no question count, use default ----
+          const t4 = await supabase
+            .from('lessons')
+            .select('id, course_id, is_active');
+
+          if (!t4.error) {
+            rows = ((t4.data ?? []) as Array<Record<string, any>>).map(
+              (r) => ({ ...r, total_questions: DEFAULT_QUESTIONS_PER_LESSON })
+            );
+          } else {
+            console.warn(
+              '[CertificateButton] lessons select (id, course_id, is_active) failed:',
+              t4.error.message
+            );
+
+            // ---- Attempt 5: legacy `book_id` ----
+            const t5 = await supabase.from('lessons').select('id, book_id');
+
+            if (!t5.error) {
+              rows = ((t5.data ?? []) as Array<Record<string, any>>).map(
+                (r) => ({
+                  id: r.id,
+                  course_id: r.book_id,
+                  is_active: true,
+                  total_questions: DEFAULT_QUESTIONS_PER_LESSON,
+                })
+              );
+            } else {
+              console.error(
+                'DEBUG_SUPABASE_ERROR (lessons, non-fatal):',
+                t5.error
+              );
+              rows = [];
+            }
+          }
         }
       }
     }
   } catch (err) {
     console.error('DEBUG_SUPABASE_ERROR (lessons, non-fatal):', err);
+    rows = [];
   }
 
+  // ---- Aggregate rows ----
   for (const row of rows) {
     if (row.is_active === false) continue;
+
     const courseId = String(row.course_id ?? row.book_id ?? '');
     const lessonId = String(row.id ?? '');
     if (!courseId || !lessonId) continue;
 
-    const set = lessonsByCourse.get(courseId) ?? new Set<string>();
-    set.add(lessonId);
-    lessonsByCourse.set(courseId, set);
+    const rawMax = Number(
+      row.total_questions ?? row.questions_count ?? row.question_count
+    );
+    const lessonMax =
+      Number.isFinite(rawMax) && rawMax > 0
+        ? rawMax
+        : DEFAULT_QUESTIONS_PER_LESSON;
+
+    const courseSet =
+      lessonsByCourse.get(courseId) ?? new Set<string>();
+    courseSet.add(lessonId);
+    lessonsByCourse.set(courseId, courseSet);
+
+    lessonMaxById.set(lessonId, lessonMax);
+    perCourseMax.set(courseId, (perCourseMax.get(courseId) ?? 0) + lessonMax);
+
+    totalMaxQuestions += lessonMax;
+    lessonsCount += 1;
   }
 
-  return lessonsByCourse;
+  return {
+    lessonsByCourse,
+    lessonMaxById,
+    perCourseMax,
+    totalMaxQuestions,
+    lessonsCount,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +391,8 @@ export default function CertificateButton({
     missingReasons: [],
     untouchedCourses: [],
     incompleteCourses: [],
+    totalEarnedScore: 0,
+    totalCurriculumMax: 0,
   });
 
   // ----- Download state -----
@@ -317,11 +421,19 @@ export default function CertificateButton({
     setEligibilityLoading(true);
     setEligibilityError(null);
 
-    // ---- A) Fetch active lessons, grouped by course ----
-    console.log(`${DEBUG_TAG} STEP A — fetching active lessons grouped by course...`);
-    const lessonsByCourse = await fetchActiveLessonsByCourse();
+    // ---- A) Fetch curriculum data (lessons + question counts) ----
+    console.log(`${DEBUG_TAG} STEP A — fetching curriculum data (lessons + question counts)...`);
+    const curriculum = await fetchCurriculumData();
 
-    // Convert the Map to a loggable object so DevTools shows it nicely.
+    const {
+      lessonsByCourse,
+      lessonMaxById,
+      perCourseMax,
+      totalMaxQuestions: totalMaxFromLessons,
+      lessonsCount,
+    } = curriculum;
+
+    // Log curriculum snapshot in a friendly form.
     const lessonsByCourseObject: Record<string, string[]> = {};
     for (const [courseSlug, lessonSet] of lessonsByCourse.entries()) {
       lessonsByCourseObject[courseSlug] = Array.from(lessonSet);
@@ -330,20 +442,33 @@ export default function CertificateButton({
       `${DEBUG_TAG} lessonsByCourse (raw):`,
       lessonsByCourseObject
     );
+    console.log(
+      `${DEBUG_TAG} lessonsCount (total active lessons):`,
+      lessonsCount
+    );
+    console.log(
+      `${DEBUG_TAG} totalMaxFromLessons (sum of all lesson question counts):`,
+      totalMaxFromLessons
+    );
 
-    // Total active lessons across the 4 required courses ONLY.
-    let totalRequiredLessons = 0;
+    // Per-course curriculum max (for required courses only).
+    const requiredCourseMax: Record<string, number> = {};
     for (const course of REQUIRED_COURSES) {
-      const set = lessonsByCourse.get(course.slug);
-      const courseLessonCount = set ? set.size : 0;
-      totalRequiredLessons += courseLessonCount;
+      const max = perCourseMax.get(course.slug) ?? 0;
+      requiredCourseMax[course.slug] = max;
       console.log(
-        `${DEBUG_TAG}   • ${course.slug} → ${courseLessonCount} active lesson(s)`
+        `${DEBUG_TAG}   • ${course.slug} → ${max} curriculum questions`
       );
     }
+
+    // Total curriculum max restricted to the four required courses.
+    let totalCurriculumMax = 0;
+    for (const course of REQUIRED_COURSES) {
+      totalCurriculumMax += perCourseMax.get(course.slug) ?? 0;
+    }
     console.log(
-      `${DEBUG_TAG} totalRequiredLessons (sum across 4 required courses):`,
-      totalRequiredLessons
+      `${DEBUG_TAG} totalCurriculumMax (required courses only):`,
+      totalCurriculumMax
     );
 
     // ---- B) Fetch the student's quiz attempts ----
@@ -356,10 +481,7 @@ export default function CertificateButton({
         .eq('user_id', userId);
 
       if (error) {
-        console.error(
-          `${DEBUG_TAG} quiz_results fetch ERROR:`,
-          error
-        );
+        console.error(`${DEBUG_TAG} quiz_results fetch ERROR:`, error);
         console.error('DEBUG_SUPABASE_ERROR (quiz_results):', error);
         setEligibilityError(
           `የፈተና ውጤቶችን ማግኘት አልተቻለም: ${error.message}`
@@ -383,20 +505,19 @@ export default function CertificateButton({
 
     // ---- C) Group attempts by course → lesson, and track final exam ----
     //
-    //  attemptsByCourse: Map<courseSlug, Map<lessonKey, { score, total }>>
-    //    → best attempt per lesson per course
+    //   attemptsByCourse: Map<courseSlug, Map<lessonKey, { score, total }>>
+    //     → best attempt per lesson per course (retakes don't double-count)
     //
-    //  A separate slot tracks the best final-exam attempt.
+    //   A separate slot tracks the best final-exam attempt.
     const attemptsByCourse = new Map<
       string,
       Map<string, { score: number; total: number }>
     >();
     let bestFinalExam: { score: number; total: number } | null = null;
 
-    // Also track which of the REQUIRED course slugs are actually present.
     const requiredSlugs = new Set(REQUIRED_COURSES.map((c) => c.slug));
 
-    // Debug-only collections for the summary log below.
+    // Debug-only collections.
     const seenCourseSlugs = new Set<string>();
     const seenLessonIds = new Set<string>();
     let finalExamRowCount = 0;
@@ -420,11 +541,11 @@ export default function CertificateButton({
       );
       if (!courseId) continue;
 
-      if (courseId) seenCourseSlugs.add(courseId);
+      seenCourseSlugs.add(courseId);
 
       // Only track courses that are part of the required program.
-      // (Non-required courses are ignored for eligibility purposes.)
       const isRequired = requiredSlugs.has(courseId);
+      if (!isRequired) continue;
 
       const lessonKey = String(
         row.lesson_id ?? row.lesson_slug ?? row.quiz_id ?? courseId
@@ -441,10 +562,6 @@ export default function CertificateButton({
       }
 
       attemptsByCourse.set(courseId, courseMap);
-
-      // Suppress unused-variable linter hint for isRequired (kept for
-      // readability / future use).
-      void isRequired;
     }
 
     console.log(
@@ -455,16 +572,10 @@ export default function CertificateButton({
       `${DEBUG_TAG} unique (course::lesson) keys found in quiz_results:`,
       Array.from(seenLessonIds)
     );
-    console.log(
-      `${DEBUG_TAG} final-exam rows encountered:`,
-      finalExamRowCount
-    );
-    console.log(
-      `${DEBUG_TAG} bestFinalExam:`,
-      bestFinalExam
-    );
+    console.log(`${DEBUG_TAG} final-exam rows encountered:`, finalExamRowCount);
+    console.log(`${DEBUG_TAG} bestFinalExam:`, bestFinalExam);
 
-    // ---- D) Evaluate each required course independently ----
+    // ---- D) Compute user's earned score across all required courses ----
     interface CourseStat {
       slug: string;
       label: string;
@@ -475,17 +586,14 @@ export default function CertificateButton({
 
     const perCourseStats: CourseStat[] = [];
     let completedLessonsAll = 0;
-    let sumScoreAll = 0;
-    let sumTotalAll = 0;
+    let totalEarnedScore = 0;
 
     for (const course of REQUIRED_COURSES) {
       const courseMap = attemptsByCourse.get(course.slug);
       const attemptedLessonIds = courseMap ? Array.from(courseMap.keys()) : [];
       const completedCount = attemptedLessonIds.length;
 
-      // Total expected lessons for this course from the `lessons` table.
-      // Fallback: if the table has no rows for this course, require at
-      // least 1 attempt so the student isn't blocked by an infra gap.
+      // Total lessons expected for this course from `lessons` table.
       const requiredSet = lessonsByCourse.get(course.slug);
       const requiredFromTable = requiredSet ? requiredSet.size : 0;
       const effectiveRequired =
@@ -501,27 +609,21 @@ export default function CertificateButton({
 
       // Sum best scores for every completed lesson in this course.
       let courseScore = 0;
-      let courseTotal = 0;
       if (courseMap) {
-        for (const { score, total } of courseMap.values()) {
+        for (const { score } of courseMap.values()) {
           courseScore += score;
-          courseTotal += total;
         }
       }
 
       console.log(
-        `${DEBUG_TAG}   • course ${course.slug}: attempted=${completedCount > 0}, completed=${completedCount}/${effectiveRequired}, courseScore=${courseScore}, courseTotal=${courseTotal}`
+        `${DEBUG_TAG}   • course ${course.slug}: attempted=${completedCount > 0}, completed=${completedCount}/${effectiveRequired}, earnedScore=${courseScore}, curriculumMax=${perCourseMax.get(course.slug) ?? 0}`
       );
 
       completedLessonsAll += completedCount;
-      sumScoreAll += courseScore;
-      sumTotalAll += courseTotal;
+      totalEarnedScore += courseScore;
     }
 
-    console.log(
-      `${DEBUG_TAG} perCourseStats:`,
-      perCourseStats
-    );
+    console.log(`${DEBUG_TAG} perCourseStats:`, perCourseStats);
 
     // ---- E) Add the final exam to the aggregate ----
     const hasFinalExam = bestFinalExam !== null;
@@ -530,21 +632,22 @@ export default function CertificateButton({
         ? Math.round((bestFinalExam.score / bestFinalExam.total) * 100)
         : 0;
 
+    let totalCurriculumWithExam = totalCurriculumMax;
     if (bestFinalExam) {
-      sumScoreAll += bestFinalExam.score;
-      sumTotalAll += bestFinalExam.total;
+      totalEarnedScore += bestFinalExam.score;
+      totalCurriculumWithExam += bestFinalExam.total;
     }
 
     const combinedPercent =
-      sumTotalAll > 0
-        ? Math.round((sumScoreAll / sumTotalAll) * 100)
+      totalCurriculumWithExam > 0
+        ? Math.round((totalEarnedScore / totalCurriculumWithExam) * 100)
         : 0;
 
     console.log(`${DEBUG_TAG} hasFinalExam:`, hasFinalExam);
     console.log(`${DEBUG_TAG} finalExamPercent:`, finalExamPercent);
-    console.log(`${DEBUG_TAG} sumScoreAll (lessons + final exam):`, sumScoreAll);
-    console.log(`${DEBUG_TAG} sumTotalAll (lessons + final exam):`, sumTotalAll);
-    console.log(`${DEBUG_TAG} combinedPercent:`, combinedPercent);
+    console.log(`${DEBUG_TAG} totalEarnedScore (all required courses + final exam):`, totalEarnedScore);
+    console.log(`${DEBUG_TAG} totalCurriculumWithExam (all required questions + final exam questions):`, totalCurriculumWithExam);
+    console.log(`${DEBUG_TAG} combinedPercent (system-wide):`, combinedPercent);
 
     // ---- F) Apply every rule ----
     //
@@ -561,7 +664,7 @@ export default function CertificateButton({
     );
 
     // Rule C — final exam must be completed.
-    // Rule D — combined score must be >= 50%.
+    // Rule D — system-wide score must be >= 50%.
     const combinedScoreOk = combinedPercent >= PASS_THRESHOLD_PERCENT;
 
     const allCoursesAttempted = untouched.length === 0;
@@ -585,7 +688,7 @@ export default function CertificateButton({
 
     if (!combinedScoreOk) {
       missingReasons.push(
-        `አጠቃላይ ውጤት ቢያንስ ${PASS_THRESHOLD_PERCENT}% መሆን አለበት (አሁን ${combinedPercent}%)።`
+        `እስካሁን ያገኙት ነጥብ ${totalEarnedScore} / ${totalCurriculumWithExam} (${combinedPercent}%) ነው። ሰርቲፊኬት ለማግኘት ከጠቅላላው ቢያንስ ${PASS_THRESHOLD_PERCENT}% ማምጣት አለብዎት።`
       );
     }
 
@@ -598,16 +701,15 @@ export default function CertificateButton({
     console.log(`${DEBUG_TAG} RULE A — all courses attempted:`, allCoursesAttempted);
     console.log(`${DEBUG_TAG} RULE B — all lessons completed:`, allLessonsCompleted);
     console.log(`${DEBUG_TAG} RULE C — has final exam:`, hasFinalExam);
-    console.log(`${DEBUG_TAG} RULE D — combined score OK (>= ${PASS_THRESHOLD_PERCENT}%):`, combinedScoreOk);
+    console.log(
+      `${DEBUG_TAG} RULE D — system-wide score OK (>= ${PASS_THRESHOLD_PERCENT}%):`,
+      combinedScoreOk
+    );
     console.log(`${DEBUG_TAG} untouchedCourses:`, untouchedCourses);
     console.log(`${DEBUG_TAG} incompleteCourses:`, incompleteCourses);
     console.log(`${DEBUG_TAG} missingReasons:`, missingReasons);
 
     // ---- G) Commit the snapshot ----
-    //
-    // `totalLessons` reflects the sum of expected lessons across all four
-    // required courses. When the `lessons` table has no rows for a course,
-    // `effectiveRequired` collapses to 1 so the value stays meaningful.
     const totalRequiredLessonsSum = perCourseStats.reduce(
       (acc, c) => acc + c.totalLessons,
       0
@@ -623,26 +725,21 @@ export default function CertificateButton({
       missingReasons,
       untouchedCourses,
       incompleteCourses,
+      totalEarnedScore,
+      totalCurriculumMax: totalCurriculumWithExam,
     };
 
     setSnapshot(nextSnapshot);
     setEligibilityLoading(false);
 
-    console.log(
-      `${DEBUG_TAG} FINAL SNAPSHOT:`,
-      nextSnapshot
-    );
-    console.log(
-      `${DEBUG_TAG} FINAL ELIGIBLE?:`,
-      nextSnapshot.eligible
-    );
+    console.log(`${DEBUG_TAG} FINAL SNAPSHOT:`, nextSnapshot);
+    console.log(`${DEBUG_TAG} FINAL ELIGIBLE?:`, nextSnapshot.eligible);
     console.log(`${DEBUG_TAG} checkEligibility() END`);
     console.log(`${DEBUG_TAG} ============================================================`);
 
-    // `totalRequiredLessons` from the lessons table is now folded into
-    // per-course effective requirements, so we no longer need the flat
-    // sum. (Kept the computation above for readability.)
-    void totalRequiredLessons;
+    // Suppress unused-variable linter hints for entries kept for debugging.
+    void lessonMaxById;
+    void totalMaxFromLessons;
   }, [userId, studentName]);
 
   useEffect(() => {
@@ -654,10 +751,17 @@ export default function CertificateButton({
   // -------------------------------------------------------------------------
   const handleDownload = useCallback(async () => {
     console.log(`${DEBUG_TAG} handleDownload() START`);
-    console.log(`${DEBUG_TAG} download trigger — userId:`, userId, '| studentName:', studentName);
+    console.log(
+      `${DEBUG_TAG} download trigger — userId:`,
+      userId,
+      '| studentName:',
+      studentName
+    );
 
     if (!userId.trim() || !studentName.trim()) {
-      console.warn(`${DEBUG_TAG} download aborted — missing userId or studentName.`);
+      console.warn(
+        `${DEBUG_TAG} download aborted — missing userId or studentName.`
+      );
       setDownloadError('የተጠቃሚ መረጃ አልተገኘም። እባክዎ እንደገና ይግቡ።');
       setSuccessMessage(null);
       return;
@@ -684,14 +788,17 @@ export default function CertificateButton({
         );
       }
 
-      console.log(`${DEBUG_TAG} /api/generate-certificate HTTP status:`, response.status);
+      console.log(
+        `${DEBUG_TAG} /api/generate-certificate HTTP status:`,
+        response.status
+      );
       console.log(`${DEBUG_TAG} /api/generate-certificate payload:`, payload);
 
       // Server-side eligibility gate — the server is the source of truth.
       if (!payload.eligible) {
-        console.warn(`${DEBUG_TAG} server replied eligible=false — refreshing snapshot and showing server message.`);
-        // Refresh the client snapshot in case our state was stale, then
-        // show the server's message.
+        console.warn(
+          `${DEBUG_TAG} server replied eligible=false — refreshing snapshot and showing server message.`
+        );
         setDownloadError(payload.message || NOT_ELIGIBLE_HEADLINE);
         checkEligibility();
         return;
@@ -823,12 +930,12 @@ export default function CertificateButton({
             }
           />
 
-          {/* Rule 3 — Combined score */}
+          {/* Rule 3 — System-wide combined score */}
           <ChecklistRow
             satisfied={snapshot.combinedPercent >= PASS_THRESHOLD_PERCENT}
             icon={<TrendingUp className="h-4 w-4" />}
             label={`አጠቃላይ ውጤት ≥ ${PASS_THRESHOLD_PERCENT}%`}
-            detail={`አሁን ${snapshot.combinedPercent}%`}
+            detail={`${snapshot.totalEarnedScore} / ${snapshot.totalCurriculumMax} (${snapshot.combinedPercent}%)`}
           />
         </ul>
       </div>
