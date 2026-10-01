@@ -140,9 +140,6 @@ function formatDateAmh(iso: string | null): string {
   }
 }
 
-/**
- * Convert any thrown value / Supabase error object into a readable string.
- */
 function describeError(err: unknown): string {
   if (!err) return 'Unknown error';
   if (typeof err === 'string') return err;
@@ -178,10 +175,6 @@ function describeError(err: unknown): string {
   return String(err);
 }
 
-/**
- * Group a student's raw quiz rows into per-course lesson breakdowns.
- * Lessons are numbered by chronological order of attempts (oldest = ደርስ 1).
- */
 function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
   const byCourse = new Map<string, QuizRow[]>();
   for (const r of rows) {
@@ -244,7 +237,6 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
   return breakdowns;
 }
 
-/** Trigger a UTF-8 BOM CSV download so Amharic renders correctly in Excel. */
 function downloadCSV(rows: StudentRow[]) {
   const headers = [
     'ስም',
@@ -395,17 +387,6 @@ export default function AdminStudentsPage() {
 
   // -------------------------------------------------------------------------
   // 2. SAFE DATA LOAD
-  //
-  //    Two independent fetches:
-  //      A) profiles     — REQUIRED. On error we surface the raw message.
-  //      B) quiz_results — OPTIONAL and SILENT. On any error (missing column,
-  //                        RLS denial, network) we log to console and
-  //                        continue with an empty list — no red banner.
-  //
-  //    FIXES for "column X does not exist (Code: 42703)":
-  //      • profiles   — no `.order()`, defensive timestamp mapping.
-  //      • quiz_results — no `.order()`, defensive timestamp mapping,
-  //                       and the whole fetch is wrapped in try/catch.
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
@@ -414,7 +395,6 @@ export default function AdminStudentsPage() {
     // ---- A) PROFILES (required) ----
     let profiles: ProfileRow[] = [];
     try {
-      // No .order() — avoids referencing a column that may not exist.
       const { data, error } = await supabase.from('profiles').select('*');
 
       if (error) {
@@ -444,7 +424,6 @@ export default function AdminStudentsPage() {
         };
       });
 
-      // Client-side sort (most recent first) — no server column reference.
       profiles.sort((a, b) => {
         const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
         const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
@@ -458,14 +437,6 @@ export default function AdminStudentsPage() {
     }
 
     // ---- B) QUIZ RESULTS (optional, SILENT on failure) ----
-    //
-    //    Notes:
-    //      • No `.order('created_at', ...)` — that's the fix for Code 42703.
-    //      • We select a minimal column set to avoid triggering errors from
-    //        unrelated columns the app doesn't even use.
-    //      • Any failure is logged to the console (prefixed with
-    //        DEBUG_SUPABASE_ERROR) but NEVER surfaced on screen — the
-    //        students list still renders with "no attempts" placeholders.
     let quizRows: QuizRow[] = [];
     try {
       const { data, error } = await supabase
@@ -473,7 +444,6 @@ export default function AdminStudentsPage() {
         .select('user_id, course_id, score, total_questions, created_at');
 
       if (error) {
-        // Try a fallback without `created_at` in case the column is missing.
         console.warn(
           '[AdminStudents] Primary quiz_results select failed, retrying minimal columns:',
           error.message
@@ -484,7 +454,6 @@ export default function AdminStudentsPage() {
           .select('user_id, course_id, score, total_questions');
 
         if (fallback.error) {
-          // Still failing — log and continue with empty quiz data.
           console.error(
             'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
             fallback.error
@@ -511,7 +480,6 @@ export default function AdminStudentsPage() {
         }));
       }
     } catch (err) {
-      // Non-fatal: log only, never surface in the UI.
       console.error(
         'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
         err
@@ -813,18 +781,19 @@ export default function AdminStudentsPage() {
             ))}
           </div>
 
+          {/* CSV export — sleek secondary outline button */}
           <button
             type="button"
             onClick={handleExport}
             disabled={filtered.length === 0}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-emerald-900/20 hover:from-emerald-500 hover:to-emerald-600 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-600 dark:border-emerald-500 bg-transparent px-4 py-2.5 text-sm font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="h-4 w-4" />
             CSV አውርድ
           </button>
         </div>
 
-        {/* ---------- ERROR BANNER (only for fatal profiles errors) ---------- */}
+        {/* ---------- ERROR BANNER ---------- */}
         {errorMessage && (
           <div
             role="alert"
@@ -864,7 +833,10 @@ export default function AdminStudentsPage() {
               <table className="w-full min-w-[1000px]">
                 <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
                   <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                    <th className="px-5 py-3 font-semibold">ተማሪ</th>
+                    {/* Sticky first header column */}
+                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800/60 px-5 py-3 font-semibold shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
+                      ተማሪ
+                    </th>
                     <th className="px-5 py-3 font-semibold">ስልክ / ኢሜይል</th>
                     <th className="px-5 py-3 font-semibold">
                       የአሁን ኪታብ እና ደርስ
@@ -881,10 +853,10 @@ export default function AdminStudentsPage() {
                     <tr
                       key={s.id}
                       onClick={() => setSelected(s)}
-                      className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
+                      className="group border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
                     >
-                      {/* Student */}
-                      <td className="px-5 py-4">
+                      {/* Student — sticky first column */}
+                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800 px-5 py-4 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
                         <div className="flex items-center gap-3">
                           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
                             {s.fullName.charAt(0).toUpperCase()}
@@ -903,10 +875,16 @@ export default function AdminStudentsPage() {
                       {/* Phone / Email */}
                       <td className="px-5 py-4">
                         <div className="flex flex-col gap-1">
-                          <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-700 dark:text-slate-300">
-                            <Phone className="h-3 w-3 text-slate-400 flex-shrink-0" />
-                            {s.phone || '—'}
-                          </span>
+                          {s.phone ? (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-700 dark:text-slate-300">
+                              <Phone className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                              {s.phone}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 italic">
+                              ስልክ አልተመዘገበም
+                            </span>
+                          )}
                           <span className="inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-[220px]">
                             <Mail className="h-3 w-3 text-slate-400 flex-shrink-0" />
                             <span className="truncate">{s.email || '—'}</span>
@@ -947,12 +925,18 @@ export default function AdminStudentsPage() {
                         </div>
                       </td>
 
-                      {/* Passed kitabs */}
+                      {/* Passed kitabs — badge color & icon logic */}
                       <td className="px-5 py-4">
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                          <CheckCircle className="h-3 w-3" />
-                          {s.passedCount} / {s.totalCourses}
-                        </span>
+                        {s.passedCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                            <CheckCircle className="h-3 w-3" />
+                            {s.passedCount} / {s.totalCourses}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-2.5 py-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            0 / {s.totalCourses}
+                          </span>
+                        )}
                       </td>
 
                       {/* Row action */}
@@ -1144,25 +1128,31 @@ function StudentModal({
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
                 ስልክ ቁጥር
               </p>
-              <p className="font-mono text-sm font-semibold text-slate-900 dark:text-white mb-3">
-                {student.phone || '—'}
-              </p>
-              {student.phone && (
-                <div className="flex flex-wrap gap-2">
-                  <a
-                    href={`tel:${cleanPhone}`}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors"
-                  >
-                    <Phone className="h-3.5 w-3.5" />
-                    ደውል
-                  </a>
-                  <a
-                    href={`sms:${cleanPhone}`}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                  >
-                    መልእክት
-                  </a>
-                </div>
+              {student.phone ? (
+                <>
+                  <p className="font-mono text-sm font-semibold text-slate-900 dark:text-white mb-3">
+                    {student.phone}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      href={`tel:${cleanPhone}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors"
+                    >
+                      <Phone className="h-3.5 w-3.5" />
+                      ደውል
+                    </a>
+                    <a
+                      href={`sms:${cleanPhone}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      መልእክት
+                    </a>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-slate-400 dark:text-slate-500 italic">
+                  ስልክ አልተመዘገበም
+                </p>
               )}
             </div>
 
@@ -1237,7 +1227,6 @@ function StudentModal({
                     key={course.courseId}
                     className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
                   >
-                    {/* Course header */}
                     <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800">
                       <div className="flex items-center gap-2 min-w-0">
                         <div
@@ -1274,7 +1263,6 @@ function StudentModal({
                       </span>
                     </div>
 
-                    {/* Lessons */}
                     <div className="divide-y divide-slate-100 dark:divide-slate-800">
                       {course.lessons.map((lesson) => (
                         <div
