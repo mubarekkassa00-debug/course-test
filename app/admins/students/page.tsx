@@ -141,6 +141,45 @@ function formatDateAmh(iso: string | null): string {
 }
 
 /**
+ * Convert any thrown value / Supabase error object into a readable string.
+ * Prefers `message` + `code` + `details` + `hint` when available.
+ */
+function describeError(err: unknown): string {
+  if (!err) return 'Unknown error';
+  if (typeof err === 'string') return err;
+
+  if (typeof err === 'object') {
+    const e = err as {
+      message?: unknown;
+      code?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      error_description?: unknown;
+      status?: unknown;
+    };
+
+    const parts: string[] = [];
+    if (e.message) parts.push(`Message: ${String(e.message)}`);
+    if (e.code) parts.push(`Code: ${String(e.code)}`);
+    if (e.details) parts.push(`Details: ${String(e.details)}`);
+    if (e.hint) parts.push(`Hint: ${String(e.hint)}`);
+    if (e.error_description)
+      parts.push(`Desc: ${String(e.error_description)}`);
+    if (e.status) parts.push(`Status: ${String(e.status)}`);
+
+    if (parts.length > 0) return parts.join(' | ');
+
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return 'Unserializable error object';
+    }
+  }
+
+  return String(err);
+}
+
+/**
  * Group a student's raw quiz rows into per-course lesson breakdowns.
  * Lessons are numbered by chronological order of attempts (oldest = ደርስ 1).
  */
@@ -287,9 +326,12 @@ export default function AdminStudentsPage() {
 
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
-  const [dataError, setDataError] = useState<string | null>(null);
-  // Non-fatal notice (e.g. quiz data unavailable). UI still renders the table.
-  const [dataNotice, setDataNotice] = useState<string | null>(null);
+
+  // -------------------------------------------------------------------------
+  // DEBUG: exact raw error message state.
+  // Whatever Supabase or the runtime throws will be surfaced here verbatim.
+  // -------------------------------------------------------------------------
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
@@ -311,7 +353,12 @@ export default function AdminStudentsPage() {
         if (cancelled) return;
 
         if (userErr || !user) {
-          console.error('Supabase Error:', userErr);
+          console.error('DEBUG_SUPABASE_ERROR:', userErr);
+          setErrorMessage(
+            userErr
+              ? `Auth Error: ${describeError(userErr)}`
+              : 'Auth Error: No authenticated user'
+          );
           router.replace('/login');
           return;
         }
@@ -325,7 +372,8 @@ export default function AdminStudentsPage() {
         if (cancelled) return;
 
         if (profileErr) {
-          console.error('Supabase Error:', profileErr);
+          console.error('DEBUG_SUPABASE_ERROR:', profileErr);
+          setErrorMessage(`Role Lookup Error: ${describeError(profileErr)}`);
           setAuthLoading(false);
           return;
         }
@@ -338,8 +386,8 @@ export default function AdminStudentsPage() {
         setAuthLoading(false);
       } catch (err) {
         if (!cancelled) {
-          console.error('Supabase Error:', err);
-          setAuthError('ያልተጠበቀ ስህተት ተከስቷል።');
+          console.error('DEBUG_SUPABASE_ERROR:', err);
+          setAuthError(`Auth Exception: ${describeError(err)}`);
           setAuthLoading(false);
         }
       }
@@ -352,21 +400,16 @@ export default function AdminStudentsPage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // 2. SAFE DATA LOAD
+  // 2. SAFE DATA LOAD — with exact error surfacing
   //
-  //    Two completely independent fetches:
-  //      A) profiles   — REQUIRED. If this fails, show the error banner.
-  //      B) quiz_results — OPTIONAL. If this fails or returns nothing, we
-  //                        still render every student with 0% progress and
-  //                        a "ምንም ፈተና አልተወሰደም" fallback in the modal.
-  //
-  //    No relational joins are used — a simple `select('*')` on each table
-  //    keeps the queries resilient to missing foreign keys or strict RLS.
+  //    Two independent fetches:
+  //      A) profiles     — REQUIRED. On error we surface the raw message.
+  //      B) quiz_results — OPTIONAL. On error we surface the raw message
+  //                        but still render every student with 0 progress.
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
-    setDataError(null);
-    setDataNotice(null);
+    setErrorMessage(null);
 
     // ---- A) PROFILES (required) ----
     let profiles: ProfileRow[] = [];
@@ -377,9 +420,12 @@ export default function AdminStudentsPage() {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Supabase Error:', error);
-        setDataError(
-          'የተማሪዎችን ዝርዝር ማግኘት አልተቻለም። እባክዎ በኋላ እንደገና ይሞክሩ።'
+        // Full raw error to console for DevTools inspection.
+        console.error('DEBUG_SUPABASE_ERROR:', error);
+
+        // Exact message + code surfaced on screen.
+        setErrorMessage(
+          `Profiles Error: ${error.message} (Code: ${error.code ?? 'N/A'})`
         );
         setDataLoading(false);
         return;
@@ -394,10 +440,8 @@ export default function AdminStudentsPage() {
         created_at: (p.created_at as string | null) ?? null,
       }));
     } catch (err) {
-      console.error('Supabase Error:', err);
-      setDataError(
-        'የተማሪዎችን ዝርዝር ማግኘት አልተቻለም። እባክዎ በኋላ እንደገና ይሞክሩ።'
-      );
+      console.error('DEBUG_SUPABASE_ERROR:', err);
+      setErrorMessage(`Profiles Exception: ${describeError(err)}`);
       setDataLoading(false);
       return;
     }
@@ -411,10 +455,13 @@ export default function AdminStudentsPage() {
         .order('created_at', { ascending: false });
 
       if (error) {
-        // Log it, but DON'T kill the page. Show a soft notice instead.
-        console.error('Supabase Error:', error);
-        setDataNotice(
-          'የፈተና ውጤቶችን ማግኘት አልተቻለም። የተማሪዎች ዝርዝር ግን ይታያል።'
+        // Log the full raw error object for DevTools.
+        console.error('DEBUG_SUPABASE_ERROR:', error);
+
+        // Exact quiz fetch error surfaced on screen. We do NOT stop the
+        // page — the student list still renders below the alert.
+        setErrorMessage(
+          `Quiz Fetch Error: ${error.message} (Code: ${error.code ?? 'N/A'})`
         );
         quizRows = [];
       } else {
@@ -427,10 +474,8 @@ export default function AdminStudentsPage() {
         }));
       }
     } catch (err) {
-      console.error('Supabase Error:', err);
-      setDataNotice(
-        'የፈተና ውጤቶችን ማግኘት አልተቻለም። የተማሪዎች ዝርዝር ግን ይታያል።'
-      );
+      console.error('DEBUG_SUPABASE_ERROR:', err);
+      setErrorMessage(`Quiz Fetch Exception: ${describeError(err)}`);
       quizRows = [];
     }
 
@@ -570,6 +615,8 @@ export default function AdminStudentsPage() {
 
   const closeModal = useCallback(() => setSelected(null), []);
 
+  const dismissError = useCallback(() => setErrorMessage(null), []);
+
   // -------------------------------------------------------------------------
   // 6. AUTH LOADING / ERROR
   // -------------------------------------------------------------------------
@@ -596,7 +643,7 @@ export default function AdminStudentsPage() {
               መግቢያ ተከልክሏል
             </h2>
           </div>
-          <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+          <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 break-words">
             {authError}
           </p>
           <Link
@@ -737,25 +784,28 @@ export default function AdminStudentsPage() {
           </button>
         </div>
 
-        {/* ---------- Error banner (fatal: profiles failed) ---------- */}
-        {dataError && (
+        {/* ---------- DEBUG ERROR BANNER ---------- */}
+        {/* Displays the exact Supabase error message on screen. */}
+        {errorMessage && (
           <div
             role="alert"
-            className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
+            className="mb-5 flex items-start gap-3 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
           >
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <p className="flex-1">{dataError}</p>
-          </div>
-        )}
-
-        {/* ---------- Notice banner (non-fatal: quizzes failed) ---------- */}
-        {!dataError && dataNotice && (
-          <div
-            role="status"
-            className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-300"
-          >
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <p className="flex-1">{dataNotice}</p>
+            <div className="flex-1 min-w-0">
+              <p className="font-bold mb-0.5">Supabase Error</p>
+              <p className="break-words font-mono text-[12px] leading-relaxed whitespace-pre-wrap">
+                {errorMessage}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={dismissError}
+              aria-label="Dismiss error"
+              className="flex-shrink-0 rounded-lg p-1 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
 
