@@ -142,7 +142,6 @@ function formatDateAmh(iso: string | null): string {
 
 /**
  * Convert any thrown value / Supabase error object into a readable string.
- * Prefers `message` + `code` + `details` + `hint` when available.
  */
 function describeError(err: unknown): string {
   if (!err) return 'Unknown error';
@@ -397,21 +396,16 @@ export default function AdminStudentsPage() {
   // -------------------------------------------------------------------------
   // 2. SAFE DATA LOAD
   //
-  //    FIX for "Profiles Error: column profiles.created_at does not exist
-  //    (Code: 42703)":
+  //    Two independent fetches:
+  //      A) profiles     — REQUIRED. On error we surface the raw message.
+  //      B) quiz_results — OPTIONAL and SILENT. On any error (missing column,
+  //                        RLS denial, network) we log to console and
+  //                        continue with an empty list — no red banner.
   //
-  //      → The previous query called `.order('created_at', ...)` which
-  //        forces PostgREST to reference the column server-side. If your
-  //        schema doesn't have `created_at`, the whole query fails.
-  //
-  //    STRATEGY:
-  //      1. Fetch `select('*')` with NO `.order()` — that never references
-  //         a specific column name, so missing columns can't break it.
-  //      2. Map each row defensively, accepting whatever timestamp-like
-  //         field the row actually has (created_at, inserted_at,
-  //         registered_at, updated_at), falling back to null.
-  //      3. `phone` is also optional — missing value becomes an empty
-  //         string and the UI renders "—".
+  //    FIXES for "column X does not exist (Code: 42703)":
+  //      • profiles   — no `.order()`, defensive timestamp mapping.
+  //      • quiz_results — no `.order()`, defensive timestamp mapping,
+  //                       and the whole fetch is wrapped in try/catch.
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
@@ -420,7 +414,7 @@ export default function AdminStudentsPage() {
     // ---- A) PROFILES (required) ----
     let profiles: ProfileRow[] = [];
     try {
-      // No .order() here — that's the fix for Code 42703.
+      // No .order() — avoids referencing a column that may not exist.
       const { data, error } = await supabase.from('profiles').select('*');
 
       if (error) {
@@ -433,7 +427,6 @@ export default function AdminStudentsPage() {
       }
 
       profiles = ((data ?? []) as Array<Record<string, any>>).map((p) => {
-        // Accept any of the common timestamp column names, or null.
         const timestamp =
           (p.created_at as string | null | undefined) ??
           (p.inserted_at as string | null | undefined) ??
@@ -451,8 +444,7 @@ export default function AdminStudentsPage() {
         };
       });
 
-      // Sort client-side by whatever timestamp we found (most recent first).
-      // Students with no timestamp sink to the bottom.
+      // Client-side sort (most recent first) — no server column reference.
       profiles.sort((a, b) => {
         const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
         const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
@@ -465,20 +457,50 @@ export default function AdminStudentsPage() {
       return;
     }
 
-    // ---- B) QUIZ RESULTS (optional) ----
+    // ---- B) QUIZ RESULTS (optional, SILENT on failure) ----
+    //
+    //    Notes:
+    //      • No `.order('created_at', ...)` — that's the fix for Code 42703.
+    //      • We select a minimal column set to avoid triggering errors from
+    //        unrelated columns the app doesn't even use.
+    //      • Any failure is logged to the console (prefixed with
+    //        DEBUG_SUPABASE_ERROR) but NEVER surfaced on screen — the
+    //        students list still renders with "no attempts" placeholders.
     let quizRows: QuizRow[] = [];
     try {
       const { data, error } = await supabase
         .from('quiz_results')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .select('user_id, course_id, score, total_questions, created_at');
 
       if (error) {
-        console.error('DEBUG_SUPABASE_ERROR:', error);
-        setErrorMessage(
-          `Quiz Fetch Error: ${error.message} (Code: ${error.code ?? 'N/A'})`
+        // Try a fallback without `created_at` in case the column is missing.
+        console.warn(
+          '[AdminStudents] Primary quiz_results select failed, retrying minimal columns:',
+          error.message
         );
-        quizRows = [];
+
+        const fallback = await supabase
+          .from('quiz_results')
+          .select('user_id, course_id, score, total_questions');
+
+        if (fallback.error) {
+          // Still failing — log and continue with empty quiz data.
+          console.error(
+            'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
+            fallback.error
+          );
+          quizRows = [];
+        } else {
+          quizRows = ((fallback.data ?? []) as Array<Record<string, any>>).map(
+            (q) => ({
+              user_id: String(q.user_id ?? ''),
+              course_id: String(q.course_id ?? ''),
+              score: (q.score as number | null) ?? null,
+              total_questions: (q.total_questions as number | null) ?? null,
+              created_at: null,
+            })
+          );
+        }
       } else {
         quizRows = ((data ?? []) as Array<Record<string, any>>).map((q) => ({
           user_id: String(q.user_id ?? ''),
@@ -489,8 +511,11 @@ export default function AdminStudentsPage() {
         }));
       }
     } catch (err) {
-      console.error('DEBUG_SUPABASE_ERROR:', err);
-      setErrorMessage(`Quiz Fetch Exception: ${describeError(err)}`);
+      // Non-fatal: log only, never surface in the UI.
+      console.error(
+        'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
+        err
+      );
       quizRows = [];
     }
 
@@ -799,7 +824,7 @@ export default function AdminStudentsPage() {
           </button>
         </div>
 
-        {/* ---------- DEBUG ERROR BANNER ---------- */}
+        {/* ---------- ERROR BANNER (only for fatal profiles errors) ---------- */}
         {errorMessage && (
           <div
             role="alert"
