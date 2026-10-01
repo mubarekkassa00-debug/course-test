@@ -81,6 +81,12 @@ const NOT_ELIGIBLE_HEADLINE =
 const MISSING_COURSES_REASON =
   'አራቱንም ኪታቦች (ዩሱል አል-ሠላሠ፣ አርባኢን፣ ሹሩጥ አስ-ሶላህ፣ ኡርጁዘህ) ማጠናቀቅ አለብዎት።';
 
+/**
+ * Distinct prefix for every debug log emitted by this component.
+ * Filter DevTools console by `[CERTIFICATE DEBUG]` to see only these.
+ */
+const DEBUG_TAG = '[CERTIFICATE DEBUG]';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -294,7 +300,15 @@ export default function CertificateButton({
   // 1. Fetch eligibility snapshot from Supabase
   // -------------------------------------------------------------------------
   const checkEligibility = useCallback(async () => {
+    console.log(`${DEBUG_TAG} ============================================================`);
+    console.log(`${DEBUG_TAG} checkEligibility() START`);
+    console.log(`${DEBUG_TAG} userId being checked:`, userId);
+    console.log(`${DEBUG_TAG} studentName being checked:`, studentName);
+    console.log(`${DEBUG_TAG} required courses:`, REQUIRED_COURSES.map((c) => c.slug));
+    console.log(`${DEBUG_TAG} pass threshold percent:`, PASS_THRESHOLD_PERCENT);
+
     if (!userId.trim()) {
+      console.warn(`${DEBUG_TAG} ABORT — userId is empty.`);
       setEligibilityError('የተጠቃሚ መረጃ አልተገኘም። እባክዎ እንደገና ይግቡ።');
       setEligibilityLoading(false);
       return;
@@ -304,16 +318,36 @@ export default function CertificateButton({
     setEligibilityError(null);
 
     // ---- A) Fetch active lessons, grouped by course ----
+    console.log(`${DEBUG_TAG} STEP A — fetching active lessons grouped by course...`);
     const lessonsByCourse = await fetchActiveLessonsByCourse();
+
+    // Convert the Map to a loggable object so DevTools shows it nicely.
+    const lessonsByCourseObject: Record<string, string[]> = {};
+    for (const [courseSlug, lessonSet] of lessonsByCourse.entries()) {
+      lessonsByCourseObject[courseSlug] = Array.from(lessonSet);
+    }
+    console.log(
+      `${DEBUG_TAG} lessonsByCourse (raw):`,
+      lessonsByCourseObject
+    );
 
     // Total active lessons across the 4 required courses ONLY.
     let totalRequiredLessons = 0;
     for (const course of REQUIRED_COURSES) {
       const set = lessonsByCourse.get(course.slug);
-      totalRequiredLessons += set ? set.size : 0;
+      const courseLessonCount = set ? set.size : 0;
+      totalRequiredLessons += courseLessonCount;
+      console.log(
+        `${DEBUG_TAG}   • ${course.slug} → ${courseLessonCount} active lesson(s)`
+      );
     }
+    console.log(
+      `${DEBUG_TAG} totalRequiredLessons (sum across 4 required courses):`,
+      totalRequiredLessons
+    );
 
     // ---- B) Fetch the student's quiz attempts ----
+    console.log(`${DEBUG_TAG} STEP B — fetching quiz_results for user ${userId}...`);
     let attempts: Array<Record<string, any>> = [];
     try {
       const { data, error } = await supabase
@@ -322,6 +356,10 @@ export default function CertificateButton({
         .eq('user_id', userId);
 
       if (error) {
+        console.error(
+          `${DEBUG_TAG} quiz_results fetch ERROR:`,
+          error
+        );
         console.error('DEBUG_SUPABASE_ERROR (quiz_results):', error);
         setEligibilityError(
           `የፈተና ውጤቶችን ማግኘት አልተቻለም: ${error.message}`
@@ -331,7 +369,12 @@ export default function CertificateButton({
       }
 
       attempts = (data ?? []) as Array<Record<string, any>>;
+      console.log(
+        `${DEBUG_TAG} quiz_results fetch OK — ${attempts.length} row(s) returned`
+      );
+      console.log(`${DEBUG_TAG} attempts (raw array):`, attempts);
     } catch (err) {
+      console.error(`${DEBUG_TAG} quiz_results fetch THREW:`, err);
       console.error('DEBUG_SUPABASE_ERROR (quiz_results):', err);
       setEligibilityError(`የፈተና ውጤቶችን ማግኘት አልተቻለም: ${describeError(err)}`);
       setEligibilityLoading(false);
@@ -353,12 +396,18 @@ export default function CertificateButton({
     // Also track which of the REQUIRED course slugs are actually present.
     const requiredSlugs = new Set(REQUIRED_COURSES.map((c) => c.slug));
 
+    // Debug-only collections for the summary log below.
+    const seenCourseSlugs = new Set<string>();
+    const seenLessonIds = new Set<string>();
+    let finalExamRowCount = 0;
+
     for (const row of attempts) {
       const score = Number(row.score) || 0;
       const total = Number(row.total_questions) || 0;
 
       // ---- C1. Final exam branch ----
       if (row.is_final_exam === true) {
+        finalExamRowCount += 1;
         if (!bestFinalExam || score > bestFinalExam.score) {
           bestFinalExam = { score, total };
         }
@@ -371,6 +420,8 @@ export default function CertificateButton({
       );
       if (!courseId) continue;
 
+      if (courseId) seenCourseSlugs.add(courseId);
+
       // Only track courses that are part of the required program.
       // (Non-required courses are ignored for eligibility purposes.)
       const isRequired = requiredSlugs.has(courseId);
@@ -378,6 +429,7 @@ export default function CertificateButton({
       const lessonKey = String(
         row.lesson_id ?? row.lesson_slug ?? row.quiz_id ?? courseId
       );
+      if (lessonKey) seenLessonIds.add(`${courseId}::${lessonKey}`);
 
       const courseMap =
         attemptsByCourse.get(courseId) ??
@@ -394,6 +446,23 @@ export default function CertificateButton({
       // readability / future use).
       void isRequired;
     }
+
+    console.log(
+      `${DEBUG_TAG} unique course slugs found in quiz_results:`,
+      Array.from(seenCourseSlugs)
+    );
+    console.log(
+      `${DEBUG_TAG} unique (course::lesson) keys found in quiz_results:`,
+      Array.from(seenLessonIds)
+    );
+    console.log(
+      `${DEBUG_TAG} final-exam rows encountered:`,
+      finalExamRowCount
+    );
+    console.log(
+      `${DEBUG_TAG} bestFinalExam:`,
+      bestFinalExam
+    );
 
     // ---- D) Evaluate each required course independently ----
     interface CourseStat {
@@ -440,10 +509,19 @@ export default function CertificateButton({
         }
       }
 
+      console.log(
+        `${DEBUG_TAG}   • course ${course.slug}: attempted=${completedCount > 0}, completed=${completedCount}/${effectiveRequired}, courseScore=${courseScore}, courseTotal=${courseTotal}`
+      );
+
       completedLessonsAll += completedCount;
       sumScoreAll += courseScore;
       sumTotalAll += courseTotal;
     }
+
+    console.log(
+      `${DEBUG_TAG} perCourseStats:`,
+      perCourseStats
+    );
 
     // ---- E) Add the final exam to the aggregate ----
     const hasFinalExam = bestFinalExam !== null;
@@ -461,6 +539,12 @@ export default function CertificateButton({
       sumTotalAll > 0
         ? Math.round((sumScoreAll / sumTotalAll) * 100)
         : 0;
+
+    console.log(`${DEBUG_TAG} hasFinalExam:`, hasFinalExam);
+    console.log(`${DEBUG_TAG} finalExamPercent:`, finalExamPercent);
+    console.log(`${DEBUG_TAG} sumScoreAll (lessons + final exam):`, sumScoreAll);
+    console.log(`${DEBUG_TAG} sumTotalAll (lessons + final exam):`, sumTotalAll);
+    console.log(`${DEBUG_TAG} combinedPercent:`, combinedPercent);
 
     // ---- F) Apply every rule ----
     //
@@ -511,6 +595,14 @@ export default function CertificateButton({
       hasFinalExam &&
       combinedScoreOk;
 
+    console.log(`${DEBUG_TAG} RULE A — all courses attempted:`, allCoursesAttempted);
+    console.log(`${DEBUG_TAG} RULE B — all lessons completed:`, allLessonsCompleted);
+    console.log(`${DEBUG_TAG} RULE C — has final exam:`, hasFinalExam);
+    console.log(`${DEBUG_TAG} RULE D — combined score OK (>= ${PASS_THRESHOLD_PERCENT}%):`, combinedScoreOk);
+    console.log(`${DEBUG_TAG} untouchedCourses:`, untouchedCourses);
+    console.log(`${DEBUG_TAG} incompleteCourses:`, incompleteCourses);
+    console.log(`${DEBUG_TAG} missingReasons:`, missingReasons);
+
     // ---- G) Commit the snapshot ----
     //
     // `totalLessons` reflects the sum of expected lessons across all four
@@ -521,7 +613,7 @@ export default function CertificateButton({
       0
     );
 
-    setSnapshot({
+    const nextSnapshot: EligibilitySnapshot = {
       totalLessons: totalRequiredLessonsSum,
       completedLessons: completedLessonsAll,
       hasFinalExam,
@@ -531,14 +623,27 @@ export default function CertificateButton({
       missingReasons,
       untouchedCourses,
       incompleteCourses,
-    });
+    };
+
+    setSnapshot(nextSnapshot);
     setEligibilityLoading(false);
+
+    console.log(
+      `${DEBUG_TAG} FINAL SNAPSHOT:`,
+      nextSnapshot
+    );
+    console.log(
+      `${DEBUG_TAG} FINAL ELIGIBLE?:`,
+      nextSnapshot.eligible
+    );
+    console.log(`${DEBUG_TAG} checkEligibility() END`);
+    console.log(`${DEBUG_TAG} ============================================================`);
 
     // `totalRequiredLessons` from the lessons table is now folded into
     // per-course effective requirements, so we no longer need the flat
     // sum. (Kept the computation above for readability.)
     void totalRequiredLessons;
-  }, [userId]);
+  }, [userId, studentName]);
 
   useEffect(() => {
     checkEligibility();
@@ -548,7 +653,11 @@ export default function CertificateButton({
   // 2. Download handler — only fires when client-side eligible
   // -------------------------------------------------------------------------
   const handleDownload = useCallback(async () => {
+    console.log(`${DEBUG_TAG} handleDownload() START`);
+    console.log(`${DEBUG_TAG} download trigger — userId:`, userId, '| studentName:', studentName);
+
     if (!userId.trim() || !studentName.trim()) {
+      console.warn(`${DEBUG_TAG} download aborted — missing userId or studentName.`);
       setDownloadError('የተጠቃሚ መረጃ አልተገኘም። እባክዎ እንደገና ይግቡ።');
       setSuccessMessage(null);
       return;
@@ -559,6 +668,7 @@ export default function CertificateButton({
     setSuccessMessage(null);
 
     try {
+      console.log(`${DEBUG_TAG} POST /api/generate-certificate...`);
       const response = await fetch('/api/generate-certificate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -574,8 +684,12 @@ export default function CertificateButton({
         );
       }
 
+      console.log(`${DEBUG_TAG} /api/generate-certificate HTTP status:`, response.status);
+      console.log(`${DEBUG_TAG} /api/generate-certificate payload:`, payload);
+
       // Server-side eligibility gate — the server is the source of truth.
       if (!payload.eligible) {
+        console.warn(`${DEBUG_TAG} server replied eligible=false — refreshing snapshot and showing server message.`);
         // Refresh the client snapshot in case our state was stale, then
         // show the server's message.
         setDownloadError(payload.message || NOT_ELIGIBLE_HEADLINE);
@@ -588,18 +702,23 @@ export default function CertificateButton({
       }
 
       const filename = buildDownloadFilename(studentName);
+      console.log(`${DEBUG_TAG} downloading PDF from:`, payload.certificateUrl);
+      console.log(`${DEBUG_TAG} target filename:`, filename);
       await forceDirectDownload(payload.certificateUrl, filename);
 
+      console.log(`${DEBUG_TAG} PDF download triggered successfully.`);
       setSuccessMessage(
         `ሰርተፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል እና በ${filename} ስም ተቀምጧል።`
       );
     } catch (err) {
+      console.error(`${DEBUG_TAG} download threw:`, err);
       const reason =
         err instanceof Error ? err.message : 'ያልታወቀ ስህተት ተከስቷል።';
       setDownloadError(reason);
       setSuccessMessage(null);
     } finally {
       setDownloading(false);
+      console.log(`${DEBUG_TAG} handleDownload() END`);
     }
   }, [userId, studentName, checkEligibility]);
 
