@@ -1432,6 +1432,12 @@ export default function LessonPage() {
   //
   // For the final exam, `lesson_id = FINAL_EXAM_LESSON_ID` (999) so it
   // stays distinct from any regular lesson row.
+  //
+  // The payload now ALSO includes:
+  //   • course_slug   → the current course identifier from the URL
+  //                     (e.g. "1", "arbain", "usul", ...)
+  //   • is_final_exam → true for the final-exam route, false for
+  //                     regular lesson quizzes
   // ------------------------------------------------------------------
   const handleSubmitQuiz = async () => {
     if (!questions.length || !lesson || submittingQuiz) return;
@@ -1478,13 +1484,19 @@ export default function LessonPage() {
         ? FINAL_EXAM_LESSON_ID
         : parseLessonNumber(lesson.lessonNumber, currentLessonId);
 
+      // Derive the current course slug from the URL params, with a
+      // safe fallback to the canonical slug if params.id is missing.
+      const courseSlug: string = courseId || canonicalSlug;
+
       const { error } = await supabase.from('quiz_results').upsert(
         {
           user_id: user.id,
           course_id: canonicalSlug,
+          course_slug: courseSlug,
           lesson_id: lessonNum,
           score: correctCount,
           total_questions: total,
+          is_final_exam: isFinalExam,
         },
         { onConflict: 'user_id,course_id,lesson_id' }
       );
