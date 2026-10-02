@@ -152,7 +152,7 @@ function computePercent(score: unknown, totalQuestions: unknown): number {
 /**
  * Build the per-course progress list.
  *
- * AGGREGATION RULE (updated):
+ * AGGREGATION RULE:
  *   For each course_id, sum the earned `score` and the maximum possible
  *   `total_questions` across ALL quiz_results rows, then compute the
  *   aggregate percentage as:
@@ -756,17 +756,8 @@ export default function DashboardPage() {
     (c) => c.status === 'passed'
   ).length;
 
-  const allCoursesPassed =
-    totalCoursesCount > 0 && passedCount === totalCoursesCount;
-
   // -------------------------------------------------------------------------
   // Overall progress = plain average of every course's aggregated percentage.
-  //
-  //   overallProgressPct = (sum of all course percentages) / totalCoursesCount
-  //
-  // No capping at 50% and no partial credit weighting — this reflects the
-  // student's true standing across all courses, so a course at 100% pulls
-  // the average up and a course at 20% pulls it down proportionally.
   // -------------------------------------------------------------------------
   const overallProgressPct =
     totalCoursesCount > 0
@@ -778,7 +769,6 @@ export default function DashboardPage() {
 
   // -------------------------------------------------------------------------
   // Loading state — shown while auth is being verified or user is unknown.
-  // Prevents any flash of unauthenticated UI or placeholder content.
   // -------------------------------------------------------------------------
   if (loading) {
     return (
@@ -880,7 +870,7 @@ export default function DashboardPage() {
         {/* Mobile dropdown navigation panel */}
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-slate-200/60 dark:border-slate-800/60 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl">
-            <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3">
+            <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-1">
               <Link
                 href="/dashboard/payment"
                 onClick={() => setMobileMenuOpen(false)}
@@ -891,6 +881,26 @@ export default function DashboardPage() {
                 </span>
                 <span>የክፍያ ሁኔታ</span>
               </Link>
+
+              {/* NEW — Certificate download moved into the mobile drawer */}
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleDownloadCertificate();
+                }}
+                disabled={certLoading}
+                className="w-full flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700 dark:hover:text-amber-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed text-left"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/60">
+                  {certLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-amber-700 dark:text-amber-300" />
+                  ) : (
+                    <GraduationCap className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                  )}
+                </span>
+                <span>{certLoading ? 'በመዘጋጀት ላይ...' : 'የኔ ሰርቲፊኬት'}</span>
+              </button>
             </nav>
           </div>
         )}
@@ -946,6 +956,59 @@ export default function DashboardPage() {
                   ይጠብቁ።
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* CERTIFICATE DOWNLOAD ERROR / SUCCESS TOASTS                  */}
+        {/*                                                              */}
+        {/* The big certificate card has been moved into the mobile      */}
+        {/* hamburger drawer. Only the small inline toasts remain here  */}
+        {/* so the student gets feedback when they tap the menu item.   */}
+        {/* ============================================================ */}
+        {certError && !certLoading && (
+          <div
+            role="alert"
+            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
+            <div className="flex-1">
+              <p className="font-semibold">
+                ሰርቲፊኬቱን ማዘጋጀት አልተቻለም
+              </p>
+              <p className="mt-0.5 whitespace-pre-line leading-relaxed">
+                {certError}
+              </p>
+              <button
+                type="button"
+                onClick={() => setCertError(null)}
+                className="mt-2 text-xs font-semibold underline hover:no-underline"
+              >
+                ዝጋ
+              </button>
+            </div>
+          </div>
+        )}
+
+        {certSuccess && !certLoading && !certError && (
+          <div
+            role="status"
+            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-emerald-300 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300"
+          >
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
+            <div className="flex-1">
+              <p className="font-semibold">
+                ሰርቲፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል!
+              </p>
+              <p className="mt-0.5 leading-relaxed">{certSuccess}</p>
+              <button
+                type="button"
+                onClick={() => setCertSuccess(null)}
+                className="mt-2 text-xs font-semibold underline hover:no-underline"
+              >
+                ዝጋ
+              </button>
             </div>
           </div>
         )}
@@ -1102,132 +1165,6 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-
-        {/* ============================================================ */}
-        {/* PRIMARY CARD 3 — CERTIFICATE FLOW                            */}
-        {/* ============================================================ */}
-        {!paymentLoading && isPaymentApproved && (
-          <>
-            {!progressLoading && allCoursesPassed && (
-              <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-amber-100 dark:from-emerald-900/40 dark:to-amber-900/40">
-                      <GraduationCap className="h-6 w-6 text-emerald-700 dark:text-amber-300" />
-                    </div>
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-1">
-                      የምስክር ወረቀት
-                    </h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                      አራቱንም ኪታቦች በ{PASS_THRESHOLD_PERCENT}% እና ከዚያ
-                      በላይ አጠናቅቀዋል። ክፍያዎም ጸድቋል። አሁን
-                      የምስክር ወረቀትዎን ማውረድ ይችላሉ።
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={handleDownloadCertificate}
-                      disabled={certLoading}
-                      aria-busy={certLoading}
-                      className={[
-                        'w-full sm:w-auto inline-flex items-center justify-center gap-2',
-                        'px-5 py-3 rounded-xl',
-                        'font-bold text-sm tracking-wide',
-                        'bg-gradient-to-r from-emerald-700 via-emerald-600 to-emerald-700',
-                        'text-white ring-1 ring-amber-400/40',
-                        'shadow-lg shadow-emerald-950/40',
-                        'transition-all duration-200',
-                        'hover:from-emerald-600 hover:via-emerald-500 hover:to-emerald-600',
-                        'hover:ring-amber-400/70',
-                        'active:scale-[0.985]',
-                        'disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100',
-                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300',
-                      ].join(' ')}
-                    >
-                      {certLoading ? (
-                        <>
-                          <Loader2 className="h-5 w-5 animate-spin text-amber-200" />
-                          <span>ሰርቲፊኬቱ በመዘጋጀት ላይ ነው...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Download className="h-5 w-5 text-amber-300" />
-                          <span>ሰርቲፊኬቱን አውርድ (PDF)</span>
-                        </>
-                      )}
-                    </button>
-
-                    {certError && !certLoading && (
-                      <div
-                        role="alert"
-                        className="mt-3 flex items-start gap-3 rounded-xl border border-red-800/60 bg-red-950/40 px-4 py-3 text-sm text-red-200"
-                      >
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-                        <div className="flex-1">
-                          <p className="font-semibold text-red-300">
-                            ሰርቲፊኬቱን ማዘጋጀት አልተቻለም
-                          </p>
-                          <p className="mt-0.5 whitespace-pre-line leading-relaxed text-red-200/90">
-                            {certError}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    {certSuccess && !certLoading && !certError && (
-                      <div
-                        role="status"
-                        className="mt-3 flex items-start gap-3 rounded-xl border border-emerald-800/60 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-200"
-                      >
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                        <div className="flex-1">
-                          <p className="font-semibold text-emerald-300">
-                            ሰርቲፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል!
-                          </p>
-                          <p className="mt-0.5 leading-relaxed text-emerald-200/90">
-                            {certSuccess}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!progressLoading && !allCoursesPassed && (
-              <div className="mt-6 bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-900/40">
-                      <Award className="h-6 w-6 text-emerald-600 dark:text-emerald-300" />
-                    </div>
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-1">
-                      ትምህርቱን ይቀጥሉ 🎓
-                    </h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-400">
-                      ሰርቲፊኬትዎን ለማግኘት አራቱንም ኪታቦች በ
-                      {PASS_THRESHOLD_PERCENT}% እና ከዚያ በላይ
-                      ማጠናቀቅ ያስፈልግዎታል። አሁን {passedCount} /{' '}
-                      {totalCoursesCount} ኪታቦች ተጠናቅቀዋል።
-                    </p>
-                    <Link
-                      href="/courses"
-                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-700 via-emerald-600 to-emerald-700 px-4 py-2 text-sm font-bold text-white ring-1 ring-amber-400/40 shadow-md hover:from-emerald-600 hover:via-emerald-500 hover:to-emerald-600 transition-all"
-                    >
-                      <BookOpen className="h-4 w-4" />
-                      ኮርሶችን ይቀጥሉ
-                    </Link>
-                  </div>
-                </div>
-              </div>
-            )}
-          </>
-        )}
 
         {/* ============================================================ */}
         {/* SECONDARY — 4 LEARNING PILLARS                               */}
