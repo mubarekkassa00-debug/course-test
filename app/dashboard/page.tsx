@@ -1153,6 +1153,9 @@ export default function DashboardPage() {
 
         {/* ============================================================ */}
         {/* SECONDARY — 4 LEARNING PILLARS                               */}
+        {/*                                                              */}
+        {/* Only "የላቁ ኮርሶች" is active. The other three hubs are         */}
+        {/* marked "በቅርብ ቀን" (Coming Soon) and are not navigable.      */}
         {/* ============================================================ */}
         <div className="mt-8">
           <div className="flex items-center gap-2 mb-6">
@@ -1168,7 +1171,9 @@ export default function DashboardPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-3 md:gap-4">
-            {/* 1. የላቁ ኮርሶች */}
+            {/* ------------------------------------------------------ */}
+            {/* 1. የላቁ ኮርሶች — ACTIVE                               */}
+            {/* ------------------------------------------------------ */}
             <Link
               href={isPaymentApproved ? '/courses' : '#'}
               aria-disabled={!isPaymentApproved}
@@ -1201,18 +1206,20 @@ export default function DashboardPage() {
               </p>
             </Link>
 
-            {/* 2. የቁርአን ማዕከል */}
-            <Link
-              href={isPaymentApproved ? '/quran' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
+            {/* ------------------------------------------------------ */}
+            {/* 2. የቁርአን ማዕከል — COMING SOON                         */}
+            {/* ------------------------------------------------------ */}
+            <div
+              aria-disabled="true"
+              aria-label="በቅርብ ቀን"
+              className="group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 opacity-80 cursor-not-allowed select-none"
             >
+              {/* Coming Soon badge */}
+              <span className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/50 border border-amber-200 dark:border-amber-800 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 whitespace-nowrap shadow-sm">
+                <Clock className="h-3 w-3" />
+                በቅርብ ቀን
+              </span>
+
               {!isPaymentApproved && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
@@ -1226,26 +1233,28 @@ export default function DashboardPage() {
               <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-emerald-50 dark:bg-emerald-900/20 mb-3">
                 <Mic className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 የቁርአን ማዕከል
               </h4>
               <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የቃሪዎች ማዕከል – ተጅዊድና ንባብ ልምምድ።
               </p>
-            </Link>
+            </div>
 
-            {/* 3. ዳዕዋዎችና ሙሐደራዎች */}
-            <Link
-              href={isPaymentApproved ? '/dawah' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
+            {/* ------------------------------------------------------ */}
+            {/* 3. ዳዕዋዎችና ሙሐደራዎች — COMING SOON                     */}
+            {/* ------------------------------------------------------ */}
+            <div
+              aria-disabled="true"
+              aria-label="በቅርብ ቀን"
+              className="group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 opacity-80 cursor-not-allowed select-none"
             >
+              {/* Coming Soon badge */}
+              <span className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/50 border border-amber-200 dark:border-amber-800 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 whitespace-nowrap shadow-sm">
+                <Clock className="h-3 w-3" />
+                በቅርብ ቀን
+              </span>
+
               {!isPaymentApproved && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
@@ -1259,26 +1268,28 @@ export default function DashboardPage() {
               <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-blue-50 dark:bg-blue-900/20 mb-3">
                 <GraduationCap className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600 dark:text-blue-400" />
               </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 ዳዕዋዎችና ሙሐደራዎች
               </h4>
               <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 የሀገር ውስጥና ዓለም አቀፍ እስላማዊ ትምህርቶች።
               </p>
-            </Link>
+            </div>
 
-            {/* 4. ዲጂታል ቤተ-መጽሐፍት */}
-            <Link
-              href={isPaymentApproved ? '/library' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
+            {/* ------------------------------------------------------ */}
+            {/* 4. ዲጂታል ቤተ-መጽሐፍት — COMING SOON                    */}
+            {/* ------------------------------------------------------ */}
+            <div
+              aria-disabled="true"
+              aria-label="በቅርብ ቀን"
+              className="group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 opacity-80 cursor-not-allowed select-none"
             >
+              {/* Coming Soon badge */}
+              <span className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/50 border border-amber-200 dark:border-amber-800 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-300 whitespace-nowrap shadow-sm">
+                <Clock className="h-3 w-3" />
+                በቅርብ ቀን
+              </span>
+
               {!isPaymentApproved && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
@@ -1292,13 +1303,13 @@ export default function DashboardPage() {
               <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-purple-50 dark:bg-purple-900/20 mb-3">
                 <Library className="h-5 w-5 sm:h-6 sm:w-6 text-purple-600 dark:text-purple-400" />
               </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 ዲጂታል ቤተ-መጽሐፍት
               </h4>
               <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
                 ፒዲኤፍ መጻሕፍትና ንባብ ማዕከል።
               </p>
-            </Link>
+            </div>
           </div>
         </div>
 
