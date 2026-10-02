@@ -84,6 +84,35 @@ const REQUIRED_COURSES: CourseMeta[] = [
 /** Minimum percentage required to pass a course (matches backend). */
 const PASS_THRESHOLD_PERCENT = 50;
 
+// ---------------------------------------------------------------------------
+// COURSE CAPACITY MODEL
+// ---------------------------------------------------------------------------
+// Total expected questions (i.e. full course capacity) per course slug.
+// Progress is measured as (earned score across all attempts) ÷ (course
+// capacity) — NOT divided by the questions of only the attempted lessons.
+//
+// This prevents the "1 lesson passed = whole course passed" bug: scoring
+// 3/5 on a single lesson yields ~3–5% overall progress, not 60%.
+//
+// Update these numbers whenever a course's question bank changes.
+// ---------------------------------------------------------------------------
+const COURSE_TOTAL_QUESTIONS: Record<string, number> = {
+  usul_al_thalatha: 85,
+  arbain: 85,
+  shurut_as_salah: 65,
+  urjuzat: 65,
+};
+
+/** Fallback capacity for any slug not present in the map above. */
+const DEFAULT_COURSE_TOTAL_QUESTIONS = 80;
+
+/** Resolve the total-question capacity for a given course slug. */
+function getCourseCapacity(slug: string): number {
+  const explicit = COURSE_TOTAL_QUESTIONS[slug];
+  if (typeof explicit === 'number' && explicit > 0) return explicit;
+  return DEFAULT_COURSE_TOTAL_QUESTIONS;
+}
+
 // Amharic month names for Hijri calendar (1-indexed)
 const hijriMonthsAmh: string[] = [
   'ሙሐረም',
@@ -152,21 +181,23 @@ function computePercent(score: unknown, totalQuestions: unknown): number {
 /**
  * Build the per-course progress list.
  *
- * AGGREGATION RULE:
- *   For each course_id, sum the earned `score` and the maximum possible
- *   `total_questions` across ALL quiz_results rows, then compute the
- *   aggregate percentage as:
+ * AGGREGATION RULE (FIXED):
+ *   For each course_id, sum the earned `score` across ALL quiz_results
+ *   rows, then divide by the FIXED TOTAL COURSE CAPACITY (the total
+ *   expected questions for the full course — see COURSE_TOTAL_QUESTIONS),
+ *   NOT by the questions of only the attempted quizzes:
  *
- *       Math.round((sumScore / sumTotalQuestions) * 100)
+ *       Math.round((sumScore / courseCapacity) * 100)
  *
- *   This reflects the student's overall performance across every attempt
- *   for that course — not just the single best attempt.
+ *   This reflects the student's overall progress toward completing the
+ *   entire course, not just the subset they've attempted so far.
  *
  * STATUS RULES:
  *   • 'passed'      → aggregate percentage >= PASS_THRESHOLD_PERCENT (50%)
+ *                     of the FULL course capacity.
  *   • 'in_progress' → at least one quiz row exists for the course, but
- *                     aggregate percentage < 50%
- *   • 'not_started' → no quiz rows exist for the course at all
+ *                     aggregate percentage < 50% of the course capacity.
+ *   • 'not_started' → no quiz rows exist for the course at all.
  *
  * The `catalogue` argument drives which books are displayed.
  */
@@ -174,10 +205,12 @@ function buildCourseProgress(
   rawRows: any[],
   catalogue: CourseMeta[]
 ): CourseProgress[] {
-  // Aggregate (sum score, sum total_questions) per course across ALL rows.
+  // Aggregate total earned score per course across ALL rows.
+  // (totalQuestions from rows is intentionally NOT used for the denominator —
+  //  we use the fixed per-course capacity instead.)
   const aggregateByCourse = new Map<
     string,
-    { totalScore: number; totalQuestions: number }
+    { totalScore: number; attemptedQuestions: number }
   >();
 
   for (const row of rawRows || []) {
@@ -189,16 +222,17 @@ function buildCourseProgress(
 
     const current = aggregateByCourse.get(slug) ?? {
       totalScore: 0,
-      totalQuestions: 0,
+      attemptedQuestions: 0,
     };
 
     current.totalScore += score;
-    current.totalQuestions += total;
+    current.attemptedQuestions += total;
     aggregateByCourse.set(slug, current);
   }
 
   return catalogue.map(({ slug, displayName }) => {
     const agg = aggregateByCourse.get(slug);
+    const courseCapacity = getCourseCapacity(slug);
 
     // No quiz attempts recorded for this course at all.
     if (!agg) {
@@ -210,15 +244,20 @@ function buildCourseProgress(
       };
     }
 
-    // Aggregate percentage across all attempts.
+    // Progress is measured against the FULL course capacity — this is the
+    // core bug fix. Attempting only 1 lesson out of N now yields a
+    // proportional (small) percentage instead of an inflated one.
     const aggregatedPercent =
-      agg.totalQuestions > 0
-        ? Math.round((agg.totalScore / agg.totalQuestions) * 100)
+      courseCapacity > 0
+        ? Math.min(
+            100,
+            Math.round((agg.totalScore / courseCapacity) * 100)
+          )
         : 0;
 
     // At least one row exists → the student has engaged with this course.
-    // Status is 'passed' only if the aggregate clears the threshold;
-    // otherwise it's 'in_progress'.
+    // Status is 'passed' only if the aggregate clears the threshold of
+    // the FULL course capacity; otherwise it's 'in_progress'.
     let status: CourseStatus = 'in_progress';
     if (aggregatedPercent >= PASS_THRESHOLD_PERCENT) status = 'passed';
 
