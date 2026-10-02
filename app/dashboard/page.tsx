@@ -331,7 +331,9 @@ export default function DashboardPage() {
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('none');
   const [paymentLoading, setPaymentLoading] = useState(true);
 
-  // Certificate download state
+  // Certificate download state — retained for the dedicated
+  // /dashboard/certificate page flow. The dashboard body no longer triggers
+  // this handler directly; it simply links to the certificate page.
   const [certLoading, setCertLoading] = useState(false);
   const [certError, setCertError] = useState<string | null>(null);
   const [certSuccess, setCertSuccess] = useState<string | null>(null);
@@ -686,6 +688,11 @@ export default function DashboardPage() {
 
   // -------------------------------------------------------------------------
   // Certificate download handler
+  //
+  // NOTE: The dashboard hamburger menu now simply navigates to the dedicated
+  // /dashboard/certificate page. This handler is retained for use by that
+  // page (or any future caller) and is intentionally NOT invoked from the
+  // dashboard UI.
   // -------------------------------------------------------------------------
   const handleDownloadCertificate = useCallback(async () => {
     if (!user?.id) {
@@ -921,25 +928,17 @@ export default function DashboardPage() {
                 <span>የክፍያ ሁኔታ</span>
               </Link>
 
-              {/* NEW — Certificate download moved into the mobile drawer */}
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  handleDownloadCertificate();
-                }}
-                disabled={certLoading}
-                className="w-full flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700 dark:hover:text-amber-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed text-left"
+              {/* Certificate — navigates to the dedicated certificate page */}
+              <Link
+                href="/dashboard/certificate"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
               >
                 <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/60">
-                  {certLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-amber-700 dark:text-amber-300" />
-                  ) : (
-                    <GraduationCap className="h-4 w-4 text-amber-700 dark:text-amber-300" />
-                  )}
+                  <GraduationCap className="h-4 w-4 text-amber-700 dark:text-amber-300" />
                 </span>
-                <span>{certLoading ? 'በመዘጋጀት ላይ...' : 'የኔ ሰርቲፊኬት'}</span>
-              </button>
+                <span>የኔ ሰርቲፊኬት</span>
+              </Link>
             </nav>
           </div>
         )}
@@ -995,59 +994,6 @@ export default function DashboardPage() {
                   ይጠብቁ።
                 </p>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* ============================================================ */}
-        {/* CERTIFICATE DOWNLOAD ERROR / SUCCESS TOASTS                  */}
-        {/*                                                              */}
-        {/* The big certificate card has been moved into the mobile      */}
-        {/* hamburger drawer. Only the small inline toasts remain here  */}
-        {/* so the student gets feedback when they tap the menu item.   */}
-        {/* ============================================================ */}
-        {certError && !certLoading && (
-          <div
-            role="alert"
-            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
-          >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
-            <div className="flex-1">
-              <p className="font-semibold">
-                ሰርቲፊኬቱን ማዘጋጀት አልተቻለም
-              </p>
-              <p className="mt-0.5 whitespace-pre-line leading-relaxed">
-                {certError}
-              </p>
-              <button
-                type="button"
-                onClick={() => setCertError(null)}
-                className="mt-2 text-xs font-semibold underline hover:no-underline"
-              >
-                ዝጋ
-              </button>
-            </div>
-          </div>
-        )}
-
-        {certSuccess && !certLoading && !certError && (
-          <div
-            role="status"
-            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-emerald-300 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300"
-          >
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
-            <div className="flex-1">
-              <p className="font-semibold">
-                ሰርቲፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል!
-              </p>
-              <p className="mt-0.5 leading-relaxed">{certSuccess}</p>
-              <button
-                type="button"
-                onClick={() => setCertSuccess(null)}
-                className="mt-2 text-xs font-semibold underline hover:no-underline"
-              >
-                ዝጋ
-              </button>
             </div>
           </div>
         )}
