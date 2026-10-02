@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { supabase } from '@/lib/supabase';
 import {
   Home,
   BookOpen,
@@ -11,6 +12,7 @@ import {
   Menu,
   X,
   ArrowLeft,
+  Lock,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,10 @@ const amh = {
   courses: 'ኮርሶች',
   menu: 'ማውጫ',
   backToDashboard: 'ወደ ዳሽቦርድ',
+  /** Button label shown when a course is locked by the prerequisite chain. */
+  lockedCourse: 'ተቆልፏል (አስቀድመው የቀደመውን ኮርስ ያጠናቅቁ)',
+  /** Short badge shown over the cover image of a locked course. */
+  lockedBadge: 'ተቆልፏል',
 };
 
 // ---------------------------------------------------------------------------
@@ -79,12 +85,124 @@ const courses = [
 ];
 
 // ---------------------------------------------------------------------------
+// COURSE PROGRESSION — prerequisite chain
+// ---------------------------------------------------------------------------
+// The order below defines the strict prerequisite chain:
+//   Course 1 → always unlocked
+//   Course 2 → locked until Course 1 is fully passed (all lessons + final)
+//   Course 3 → locked until Course 2 is fully passed (all lessons + final)
+//   Course 4 → locked until Course 3 is fully passed (all lessons + final)
+//
+// `slug`         — the canonical value stored in `quiz_results.course_id`.
+// `lessonCount`  — the ACTUAL number of daily lessons inside the course
+//                  (matches the lesson array length on the course page,
+//                  which is the true source of truth — not the display
+//                  `lessonsCount` in the courses array above).
+// ---------------------------------------------------------------------------
+const FINAL_EXAM_LESSON_ID = 999;
+const PASS_THRESHOLD_PERCENT = 50;
+
+const COURSE_PROGRESSION: {
+  courseId: number;
+  slug: string;
+  lessonCount: number;
+}[] = [
+  { courseId: 1, slug: 'usul_al_thalatha', lessonCount: 11 },
+  { courseId: 2, slug: 'arbain', lessonCount: 11 },
+  { courseId: 3, slug: 'shurut_as_salah', lessonCount: 7 },
+  { courseId: 4, slug: 'urjuzat', lessonCount: 25 },
+];
+
+/**
+ * Returns true iff the given `quiz_results` rows contain a PASSING attempt
+ * (≥ 50%) for EVERY daily lesson (1..lessonCount) AND for the final exam
+ * (lesson_id = 999) of the specified course slug.
+ */
+function isCourseFullyPassed(
+  rows: any[],
+  slug: string,
+  lessonCount: number
+): boolean {
+  const passingLessons = new Set<number>();
+  let finalPassed = false;
+
+  for (const r of rows || []) {
+    if (String(r?.course_id ?? '') !== slug) continue;
+
+    const lid = Number(r?.lesson_id);
+    if (!Number.isFinite(lid)) continue;
+
+    const s = Number(r?.score) || 0;
+    const t = Number(r?.total_questions) || 0;
+    if (t <= 0) continue;
+
+    const pct = Math.round((s / t) * 100);
+    if (pct < PASS_THRESHOLD_PERCENT) continue;
+
+    if (lid === FINAL_EXAM_LESSON_ID) {
+      finalPassed = true;
+    } else if (lid >= 1 && lid <= lessonCount) {
+      passingLessons.add(lid);
+    }
+  }
+
+  if (!finalPassed) return false;
+  for (let i = 1; i <= lessonCount; i++) {
+    if (!passingLessons.has(i)) return false;
+  }
+  return true;
+}
+
+/**
+ * Build the unlock map across the full progression chain. Each course is
+ * unlocked only if every PREVIOUS course in the chain is fully passed.
+ * Course 1 is unconditionally unlocked.
+ */
+function computeUnlockedMap(rows: any[]): Record<number, boolean> {
+  const unlocked: Record<number, boolean> = {};
+
+  let prevFullyPassed = true; // Course 1 has no prerequisites.
+  for (const step of COURSE_PROGRESSION) {
+    unlocked[step.courseId] = prevFullyPassed;
+    if (!prevFullyPassed) {
+      // Once a link in the chain fails, all subsequent courses stay locked.
+      prevFullyPassed = false;
+      continue;
+    }
+    prevFullyPassed = isCourseFullyPassed(
+      rows,
+      step.slug,
+      step.lessonCount
+    );
+  }
+
+  return unlocked;
+}
+
+// ---------------------------------------------------------------------------
+// Default unlocked map — used before the fetch resolves so no course is
+// briefly rendered as locked on the very first paint. After the fetch, the
+// real map replaces this.
+// ---------------------------------------------------------------------------
+const DEFAULT_UNLOCKED: Record<number, boolean> = {
+  1: true,
+  2: true,
+  3: true,
+  4: true,
+};
+
+// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 export default function CoursesPage() {
   const [hasMounted, setHasMounted] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Sequential-unlock state ------------------------------------------------
+  const [unlockedMap, setUnlockedMap] =
+    useState<Record<number, boolean>>(DEFAULT_UNLOCKED);
+  const [, setProgressLoading] = useState(true);
 
   // Component did mount → safe to apply dynamic classes
   useEffect(() => {
@@ -102,6 +220,68 @@ export default function CoursesPage() {
       document.documentElement.classList.remove('dark');
     }
   }, []);
+
+  // -------------------------------------------------------------------------
+  // FETCH QUIZ RESULTS → compute sequential-unlock map
+  //
+  // Silent on any failure: if we can't read the results, we fall back to
+  // showing every course as unlocked, matching the pre-refactor behaviour
+  // and avoiding a hard "stuck locked" state for the user.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!hasMounted) return;
+    let cancelled = false;
+
+    const run = async () => {
+      setProgressLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          // No authenticated user — keep the permissive default.
+          setUnlockedMap(DEFAULT_UNLOCKED);
+          return;
+        }
+
+        const slugs = COURSE_PROGRESSION.map((c) => c.slug);
+
+        const { data, error } = await supabase
+          .from('quiz_results')
+          .select('course_id, lesson_id, score, total_questions')
+          .eq('user_id', user.id)
+          .in('course_id', slugs);
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn(
+            '[Courses] quiz_results fetch error — using permissive default:',
+            error.message
+          );
+          setUnlockedMap(DEFAULT_UNLOCKED);
+          return;
+        }
+
+        setUnlockedMap(computeUnlockedMap((data ?? []) as any[]));
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[Courses] unexpected progression error:', e);
+          setUnlockedMap(DEFAULT_UNLOCKED);
+        }
+      } finally {
+        if (!cancelled) setProgressLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMounted]);
 
   // Close drawer on Escape key
   useEffect(() => {
@@ -239,62 +419,109 @@ export default function CoursesPage() {
       {/* =================================================================== */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-12">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {courses.map((course) => (
-            <div
-              key={course.id}
-              className="group bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col transition-all duration-300 ease-out hover:scale-[1.02] hover:shadow-xl hover:shadow-emerald-950/10 hover:border-emerald-200 dark:hover:border-emerald-900/60"
-            >
-              {/* Islamic cover image with subtle gradient overlay */}
+          {courses.map((course) => {
+            const isLocked = !unlockedMap[course.id];
+
+            return (
               <div
-                className={`relative h-40 overflow-hidden bg-gradient-to-br ${course.gradient}`}
+                key={course.id}
+                className={[
+                  'group bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col transition-all duration-300 ease-out',
+                  isLocked
+                    ? 'opacity-95'
+                    : 'hover:scale-[1.02] hover:shadow-xl hover:shadow-emerald-950/10 hover:border-emerald-200 dark:hover:border-emerald-900/60',
+                ].join(' ')}
               >
-                <img
-                  src={course.image}
-                  alt={course.title}
-                  loading="lazy"
-                  className="absolute inset-0 h-full w-full object-cover opacity-90 transition-transform duration-500 ease-out group-hover:scale-110"
-                />
-                {/* Subtle dark gradient for readability + premium feel */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-black/10" />
-                {/* Islamic geometric accent line */}
-                <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-300 via-amber-500 to-amber-300" />
-
-                {/* Badges */}
-                <div className="absolute top-3 left-3 flex flex-wrap gap-2 z-10">
-                  <span className="bg-white/20 backdrop-blur-sm text-white text-xs px-2 py-0.5 rounded-full border border-white/30">
-                    {course.category}
-                  </span>
-                  <span className="bg-yellow-400/90 text-yellow-900 text-xs px-2 py-0.5 rounded-full flex items-center gap-1">
-                    <Award className="h-3 w-3" />
-                    {amh.certificateBadge}
-                  </span>
-                </div>
-              </div>
-
-              {/* Details */}
-              <div className="p-5 flex-1 flex flex-col">
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
-                  {course.title}
-                </h3>
-
-                <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-4">
-                  <BookOpen className="h-4 w-4" />
-                  <span>
-                    {course.lessonsCount} {amh.lessons}
-                  </span>
-                </div>
-
-                {/* Start button navigates to course page */}
-                <Link
-                  href={`/courses/${course.id}`}
-                  className="mt-auto w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium transition-colors text-center"
+                {/* Islamic cover image with subtle gradient overlay */}
+                <div
+                  className={`relative h-40 overflow-hidden bg-gradient-to-br ${course.gradient}`}
                 >
-                  <GraduationCap className="h-5 w-5" />
-                  {amh.courseStart}
-                </Link>
+                  <img
+                    src={course.image}
+                    alt={course.title}
+                    loading="lazy"
+                    className={[
+                      'absolute inset-0 h-full w-full object-cover opacity-90 transition-transform duration-500 ease-out',
+                      isLocked
+                        ? 'grayscale-[35%]'
+                        : 'group-hover:scale-110',
+                    ].join(' ')}
+                  />
+                  {/* Subtle dark gradient for readability + premium feel */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-black/10" />
+                  {/* Islamic geometric accent line */}
+                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-300 via-amber-500 to-amber-300" />
+
+                  {/* Badges */}
+                  <div className="absolute top-3 left-3 flex flex-wrap gap-2 z-10">
+                    <span className="bg-white/20 backdrop-blur-sm text-white text-xs px-2 py-0.5 rounded-full border border-white/30">
+                      {course.category}
+                    </span>
+                    <span className="bg-yellow-400/90 text-yellow-900 text-xs px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Award className="h-3 w-3" />
+                      {amh.certificateBadge}
+                    </span>
+                  </div>
+
+                  {/* Lock badge — top-right corner, only when locked */}
+                  {isLocked && (
+                    <div className="absolute top-3 right-3 z-10">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-900/85 dark:bg-slate-950/85 backdrop-blur-sm text-white text-[11px] font-bold px-2.5 py-1 border border-white/25 shadow-sm">
+                        <Lock className="h-3 w-3" />
+                        {amh.lockedBadge}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Lock watermark overlay — large centered lock icon */}
+                  {isLocked && (
+                    <div className="absolute inset-0 z-[5] flex items-center justify-center pointer-events-none">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-slate-900/40 dark:bg-slate-950/50 backdrop-blur-sm border border-white/25 shadow-lg">
+                        <Lock className="h-7 w-7 text-white drop-shadow" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Details */}
+                <div className="p-5 flex-1 flex flex-col">
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
+                    {course.title}
+                  </h3>
+
+                  <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 mb-4">
+                    <BookOpen className="h-4 w-4" />
+                    <span>
+                      {course.lessonsCount} {amh.lessons}
+                    </span>
+                  </div>
+
+                  {/* Action — active Link when unlocked, disabled button
+                      when locked by the prerequisite chain. */}
+                  {isLocked ? (
+                    <button
+                      type="button"
+                      disabled
+                      aria-disabled="true"
+                      aria-label={amh.lockedCourse}
+                      className="mt-auto w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-700/60 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 font-medium cursor-not-allowed select-none text-center text-xs sm:text-sm leading-tight"
+                    >
+                      <Lock className="h-4 w-4 flex-shrink-0" />
+                      <span>{amh.lockedCourse}</span>
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/courses/${course.id}`}
+                      className="mt-auto w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium transition-colors text-center"
+                    >
+                      <GraduationCap className="h-5 w-5" />
+                      {amh.courseStart}
+                    </Link>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </main>
     </div>
