@@ -58,6 +58,16 @@ const amh = {
     'እባክዎን አስቀድመው ያለፈውን ደርስ ያጠናቅቁ',
   /** Shown when the PREVIOUS lesson was passed today (same calendar day). */
   comeBackTomorrow: 'ነገ ይከፈታል (በቀን አንድ ደርስ ብቻ)',
+
+  // -------------------------------------------------------------------------
+  // Final-exam gating messages
+  // -------------------------------------------------------------------------
+  /** Shown when not all regular lessons have been passed yet. */
+  completeAllLessons:
+    'እባክዎን አስቀድመው ሁሉንም ደርሶች ያጠናቅቁ',
+  /** Shown when the LAST regular lesson was passed today. */
+  comeBackTomorrowExam:
+    'ነገ ይከፈታል (በቀን አንድ ደርስ/ፈተና ብቻ)',
 };
 
 // ---------------------------------------------------------------------------
@@ -740,7 +750,7 @@ export default function CoursePage() {
   }, [course]);
 
   // -------------------------------------------------------------------------
-  // DRIP-LOCK RESOLVER
+  // DRIP-LOCK RESOLVER (DAILY LESSONS)
   //
   // Given a lesson's 0-based index within `course.lessons`, returns whether
   // it is locked and, if so, the reason:
@@ -772,6 +782,68 @@ export default function CoursePage() {
     const passDate = new Date(prevPassDate);
     if (Number.isNaN(passDate.getTime())) {
       // Unparseable timestamp — be permissive rather than blocking.
+      return { locked: false, reason: null };
+    }
+
+    if (isSameCalendarDay(passDate, new Date())) {
+      return { locked: true, reason: 'tomorrow' };
+    }
+
+    return { locked: false, reason: null };
+  };
+
+  // -------------------------------------------------------------------------
+  // DRIP-LOCK RESOLVER (FINAL EXAM)
+  //
+  // Precedence of checks:
+  //   1. Every regular lesson must have a passing record. If even one is
+  //      missing (never passed), the final exam is LOCKED with reason
+  //      'allLessons' → "እባክዎን አስቀድመው ሁሉንም ደርሶች ያጠናቅቁ".
+  //   2. If all lessons are passed, check the LAST lesson's earliest pass
+  //      date:
+  //        • passed TODAY (same calendar day) → LOCKED, reason 'tomorrow'
+  //          → "ነገ ይከፈታል (በቀን አንድ ደርስ/ፈተና ብቻ)"
+  //        • passed on an earlier day        → UNLOCKED
+  //
+  // While `scoresLoading` is true we return unlocked so the initial paint
+  // does not flash incorrect lock states.
+  // -------------------------------------------------------------------------
+  const resolveFinalExamLock = (): {
+    locked: boolean;
+    reason: 'allLessons' | 'tomorrow' | null;
+  } => {
+    if (scoresLoading) return { locked: false, reason: null };
+
+    const lessons = course.lessons;
+    if (!lessons || lessons.length === 0) {
+      return { locked: false, reason: null };
+    }
+
+    // 1. Every lesson must have at least one passing attempt.
+    for (const lesson of lessons) {
+      const num = lessonIdToNumber(lesson.id);
+      if (num === null) {
+        // Non-standard lesson id — can't verify, so stay permissive.
+        return { locked: false, reason: null };
+      }
+      if (!lessonFirstPassDates[num]) {
+        return { locked: true, reason: 'allLessons' };
+      }
+    }
+
+    // 2. All lessons passed — check the LAST lesson's earliest pass date.
+    const lastLesson = lessons[lessons.length - 1];
+    const lastNum = lessonIdToNumber(lastLesson.id);
+    if (lastNum === null) return { locked: false, reason: null };
+
+    const lastPassDateRaw = lessonFirstPassDates[lastNum];
+    if (!lastPassDateRaw) {
+      // Shouldn't happen (loop above guarantees presence) — be safe.
+      return { locked: true, reason: 'allLessons' };
+    }
+
+    const passDate = new Date(lastPassDateRaw);
+    if (Number.isNaN(passDate.getTime())) {
       return { locked: false, reason: null };
     }
 
@@ -1070,9 +1142,14 @@ export default function CoursePage() {
             // the `final` slug by fetching all questions, shuffling,
             // and slicing to MAX_FINAL_EXAM_QUESTIONS.
             //
-            // The drip-lock system applies to daily lessons only, so
-            // the final exam remains reachable exactly as before.
+            // DRIP-LOCK (final exam):
+            //   • Not all regular lessons passed → LOCKED ('allLessons')
+            //   • All passed but last passed today → LOCKED ('tomorrow')
+            //   • All passed and last passed earlier → UNLOCKED
             // ---------------------------------------------------------
+            const finalLock = resolveFinalExamLock();
+            const isFinalLocked = finalLock.locked;
+
             const finalCompleted = !!finalScore;
             const finalPassed = finalScore ? isPassed(finalScore) : false;
 
@@ -1083,13 +1160,17 @@ export default function CoursePage() {
                 key={item.id}
                 className={[
                   'flex items-center gap-3 sm:gap-4 rounded-xl p-4 border transition-all duration-200',
-                  finalCompleted
+                  isFinalLocked
+                    ? 'bg-slate-50 dark:bg-slate-900/60 border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40'
+                    : finalCompleted
                     ? 'bg-emerald-50/60 border-emerald-200/80 shadow-sm dark:bg-emerald-500/[0.06] dark:border-emerald-500/20 dark:shadow-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'
                     : 'bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40 hover:bg-slate-100/80 dark:hover:bg-slate-800/90',
                 ].join(' ')}
               >
                 <div className="flex-shrink-0">
-                  {finalCompleted ? (
+                  {isFinalLocked ? (
+                    <Lock className="h-6 w-6 text-slate-400 dark:text-slate-500" />
+                  ) : finalCompleted ? (
                     <CheckCircle2 className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
                   ) : (
                     <Award className="h-6 w-6 text-yellow-500 dark:text-amber-400" />
@@ -1098,13 +1179,21 @@ export default function CoursePage() {
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                    <p
+                      className={[
+                        'font-semibold truncate',
+                        isFinalLocked
+                          ? 'text-slate-500 dark:text-slate-400'
+                          : 'text-slate-800 dark:text-slate-200',
+                      ].join(' ')}
+                    >
                       {amh.finalExam}
                     </p>
                     {/* Score badge — matches the lesson badge format:
                         `ውጤት: correct/total · percent%` with emerald for
-                        pass (≥ 50%) and amber for fail. */}
-                    {finalScore && (
+                        pass (≥ 50%) and amber for fail.
+                        Hidden while the exam is locked. */}
+                    {finalScore && !isFinalLocked && (
                       <span
                         className={[
                           'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] sm:text-xs font-bold whitespace-nowrap border',
@@ -1119,26 +1208,52 @@ export default function CoursePage() {
                       </span>
                     )}
                   </div>
+
+                  {/* Final-exam lock reason line — only rendered when locked */}
+                  {isFinalLocked && (
+                    <p className="mt-1 text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 flex items-start gap-1.5 leading-snug">
+                      <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                      <span>
+                        {finalLock.reason === 'tomorrow'
+                          ? amh.comeBackTomorrowExam
+                          : amh.completeAllLessons}
+                      </span>
+                    </p>
+                  )}
                 </div>
 
-                {/* Clean Next.js Link — routes to the dedicated final-exam
-                    page which has its own shuffle + slice flow. */}
-                <Link
-                  href={finalExamHref}
-                  prefetch={false}
-                  aria-label={finalCompleted ? amh.retry : amh.start}
-                  className={[
-                    'flex-shrink-0 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium transition flex items-center gap-1',
-                    finalCompleted
-                      ? 'bg-white dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-500/20'
-                      : 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950',
-                  ].join(' ')}
-                >
-                  <PlayCircle className="h-4 w-4" />
-                  <span className="hidden sm:inline">
-                    {finalCompleted ? amh.retry : amh.start}
-                  </span>
-                </Link>
+                {/* Locked → disabled button (no navigation).
+                    Unlocked → clean Next.js Link to the dedicated
+                    final-exam page which has its own shuffle + slice flow. */}
+                {isFinalLocked ? (
+                  <button
+                    type="button"
+                    disabled
+                    aria-disabled="true"
+                    aria-label={amh.locked}
+                    className="flex-shrink-0 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 cursor-not-allowed select-none"
+                  >
+                    <Lock className="h-4 w-4" />
+                    <span className="hidden sm:inline">{amh.locked}</span>
+                  </button>
+                ) : (
+                  <Link
+                    href={finalExamHref}
+                    prefetch={false}
+                    aria-label={finalCompleted ? amh.retry : amh.start}
+                    className={[
+                      'flex-shrink-0 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium transition flex items-center gap-1',
+                      finalCompleted
+                        ? 'bg-white dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-500/20'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950',
+                    ].join(' ')}
+                  >
+                    <PlayCircle className="h-4 w-4" />
+                    <span className="hidden sm:inline">
+                      {finalCompleted ? amh.retry : amh.start}
+                    </span>
+                  </Link>
+                )}
               </div>
             );
           })}
