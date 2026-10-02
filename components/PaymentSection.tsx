@@ -70,20 +70,20 @@ type UIState = 'loading' | 'idle' | 'uploading' | 'pending' | 'approved' | 'reje
 // Constants
 // ---------------------------------------------------------------------------
 
-const PAYMENT_AMOUNT_ETB = 300;
+const PAYMENT_AMOUNT_ETB = 200;
 const RECEIPTS_BUCKET = 'receipts';
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const PAYMENT_DETAILS = {
   telebirr: {
     label: 'Telebirr',
-    account: '09XXXXXXXX',
+    account: '0900459065',
     holder: 'Mubarek Kassa',
     hint: 'የቴሌብር ዋሌት ቁጥር',
   },
   cbe: {
     label: 'Commercial Bank of Ethiopia (CBE)',
-    account: '1000XXXXXXXX',
+    account: '1000721641434',
     holder: 'Mubarek Kassa',
     hint: 'የኢትዮጵያ ንግድ ባንክ አካውንት ቁጥር',
   },
