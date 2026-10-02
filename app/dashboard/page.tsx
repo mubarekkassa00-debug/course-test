@@ -28,6 +28,7 @@ import {
   Menu,
   X,
   CreditCard,
+  ShieldCheck,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -317,6 +318,14 @@ export default function DashboardPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // -------------------------------------------------------------------------
+  // USER ROLE — used to conditionally render the admin access card.
+  //
+  // Fetched from `profiles.role` after auth verification succeeds. When
+  // null/undefined, the admin card is entirely omitted from the DOM.
+  // -------------------------------------------------------------------------
+  const [userRole, setUserRole] = useState<string | null>(null);
+
+  // -------------------------------------------------------------------------
   // DYNAMIC COURSE CATALOGUE
   //
   // Starts with the hardcoded fallback so the UI never renders empty.
@@ -466,6 +475,54 @@ export default function DashboardPage() {
   useEffect(() => {
     setHijriDate(getHijriDate());
   }, []);
+
+  // -------------------------------------------------------------------------
+  // FETCH USER ROLE (for the conditional admin card)
+  //
+  // Runs once the auth state resolves. A failure here is non-fatal: we
+  // simply leave `userRole` as null, which keeps the admin card hidden
+  // and preserves the standard student view.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+
+    const fetchRole = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn(
+            '[Dashboard] role fetch error — admin card hidden:',
+            error.message
+          );
+          setUserRole(null);
+          return;
+        }
+
+        setUserRole(data?.role ? String(data.role) : null);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn(
+            '[Dashboard] role fetch unexpected error — admin card hidden:',
+            readErrorMessage(err)
+          );
+          setUserRole(null);
+        }
+      }
+    };
+
+    fetchRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   // -------------------------------------------------------------------------
   // FETCH DYNAMIC COURSE CATALOGUE
@@ -795,6 +852,9 @@ export default function DashboardPage() {
   // -------------------------------------------------------------------------
   const isPaymentApproved = paymentStatus === 'approved';
 
+  // True only when the profiles table reports the user's role as 'admin'.
+  const isAdmin = userRole === 'admin';
+
   // Total number of courses comes from the live catalogue (falls back to 4).
   const totalCoursesCount = courseCatalogue.length;
 
@@ -939,6 +999,20 @@ export default function DashboardPage() {
                 </span>
                 <span>የኔ ሰርቲፊኬት</span>
               </Link>
+
+              {/* Admin access — only for role === 'admin' */}
+              {isAdmin && (
+                <Link
+                  href="/admins/students"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/60">
+                    <ShieldCheck className="h-4 w-4 text-indigo-700 dark:text-indigo-300" />
+                  </span>
+                  <span>የተማሪዎች መቆጣጠሪያ (Admin)</span>
+                </Link>
+              )}
             </nav>
           </div>
         )}
@@ -948,6 +1022,42 @@ export default function DashboardPage() {
       {/* Main Content                                                       */}
       {/* ================================================================= */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-5 sm:mt-6 pb-12">
+        {/* ============================================================ */}
+        {/* ADMIN ACCESS CARD — only rendered when role === 'admin'       */}
+        {/* ============================================================ */}
+        {isAdmin && (
+          <Link
+            href="/admins/students"
+            className="mb-5 sm:mb-6 group relative block overflow-hidden rounded-2xl border border-indigo-300 dark:border-indigo-800 bg-gradient-to-r from-indigo-50 to-indigo-100/60 dark:from-indigo-950/50 dark:to-indigo-900/25 p-4 sm:p-5 shadow-sm hover:shadow-md hover:border-indigo-400 dark:hover:border-indigo-700 transition-all duration-300"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 shadow-lg shadow-indigo-900/20">
+                  <ShieldCheck className="h-6 w-6 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm sm:text-base font-bold text-indigo-900 dark:text-indigo-100">
+                      የተማሪዎች መቆጣጠሪያ (Admin)
+                    </p>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5">
+                      ADMIN
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-xs sm:text-sm text-indigo-800/90 dark:text-indigo-200/80 leading-relaxed">
+                    የተማሪዎችን የትምህርት ሂደትና ውጤት ይከታተሉ
+                  </p>
+                </div>
+              </div>
+
+              <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 group-hover:bg-indigo-700 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-indigo-900/20 transition-colors flex-shrink-0">
+                <ShieldCheck className="h-4 w-4" />
+                ክፈት
+              </span>
+            </div>
+          </Link>
+        )}
+
         {/* ============================================================ */}
         {/* DYNAMIC PAYMENT STATUS BANNER                                 */}
         {/* ============================================================ */}
@@ -1330,7 +1440,7 @@ export default function DashboardPage() {
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
-              የቴሌግራም ቻናላችንን ይቀላቀሉ
+              የቴሌግራም ቻናላችንን ይቀላሉ
             </h3>
           </div>
           <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
