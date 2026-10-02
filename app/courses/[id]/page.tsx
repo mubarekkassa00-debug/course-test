@@ -14,6 +14,7 @@ import {
   Menu,
   Home,
   X,
+  Lock,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,16 @@ const amh = {
   completed: 'ተጠናቋል',
   passed: 'ተሳክቷል',
   failed: 'ያልተሳካ',
+
+  // -------------------------------------------------------------------------
+  // Drip-lock (daily gating) messages
+  // -------------------------------------------------------------------------
+  locked: 'ተቆልፏል',
+  /** Shown when the PREVIOUS lesson hasn't been passed yet. */
+  completePrevious:
+    'እባክዎን አስቀድመው ያለፈውን ደርስ ያጠናቅቁ',
+  /** Shown when the PREVIOUS lesson was passed today (same calendar day). */
+  comeBackTomorrow: 'ነገ ይከፈታል (በቀን አንድ ደርስ ብቻ)',
 };
 
 // ---------------------------------------------------------------------------
@@ -109,6 +120,22 @@ function scorePercent(s: ScoreRecord): number {
 
 function isPassed(s: ScoreRecord): boolean {
   return scorePercent(s) >= PASS_THRESHOLD_PERCENT;
+}
+
+// ---------------------------------------------------------------------------
+// Calendar-day comparison helper (drip-lock logic)
+// ---------------------------------------------------------------------------
+/**
+ * True iff both dates fall on the SAME calendar day in the user's local
+ * timezone. Used to decide whether the previous lesson was passed "today"
+ * (→ next lesson locked) or on a previous day (→ next lesson unlocked).
+ */
+function isSameCalendarDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -550,12 +577,25 @@ export default function CoursePage() {
   // single query. Lesson keys are numeric (`lessonIdToNumber(lesson.id)`),
   // and the final-exam row uses the sentinel `FINAL_EXAM_LESSON_ID` (999).
   //
+  // We also read the `created_at` timestamp of every quiz attempt so the
+  // drip-lock logic can tell whether the previous lesson was passed
+  // TODAY (→ next lesson locked) or on a previous day (→ next unlocked).
+  //
   // Guarded by `hasMounted` so the fetch doesn't fire prematurely with
   // the fallback id '1' during SSR / initial hydration.
   // -------------------------------------------------------------------------
   const [lessonScores, setLessonScores] = useState<Record<number, ScoreRecord>>(
     {}
   );
+  /**
+   * For each lesson, the EARLIEST timestamp at which the student PASSED
+   * it (score/total ≥ 50%). Multiple retries within the same lesson only
+   * affect the first passing timestamp — a later re-take never pushes
+   * the date forward, which would wrongly re-lock the next lesson.
+   */
+  const [lessonFirstPassDates, setLessonFirstPassDates] = useState<
+    Record<number, string>
+  >({});
   const [finalScore, setFinalScore] = useState<ScoreRecord | null>(null);
   const [scoresLoading, setScoresLoading] = useState(true);
   const [scoresError, setScoresError] = useState<string | null>(null);
@@ -568,6 +608,7 @@ export default function CoursePage() {
     const canonicalSlug = getCanonicalCourseSlug(rawCourseId);
     if (!canonicalSlug) {
       setLessonScores({});
+      setLessonFirstPassDates({});
       setFinalScore(null);
       setScoresLoading(false);
       return;
@@ -586,13 +627,14 @@ export default function CoursePage() {
 
         if (!user) {
           setLessonScores({});
+          setLessonFirstPassDates({});
           setFinalScore(null);
           return;
         }
 
         const { data, error } = await supabase
           .from('quiz_results')
-          .select('lesson_id, score, total_questions')
+          .select('lesson_id, score, total_questions, created_at')
           .eq('user_id', user.id)
           .eq('course_id', canonicalSlug);
 
@@ -602,11 +644,13 @@ export default function CoursePage() {
           console.error('[CoursePage] quiz_results fetch error:', error);
           setScoresError('ውጤቶችን ማምጣት አልተቻለም።');
           setLessonScores({});
+          setLessonFirstPassDates({});
           setFinalScore(null);
           return;
         }
 
         const lessonMap: Record<number, ScoreRecord> = {};
+        const firstPassMap: Record<number, string> = {};
         let finalRec: ScoreRecord | null = null;
 
         for (const row of data ?? []) {
@@ -617,26 +661,51 @@ export default function CoursePage() {
             correct: Number((row as any).score) || 0,
             total: Number((row as any).total_questions) || 0,
           };
+          const createdAtRaw = (row as any).created_at;
+          const createdAt =
+            typeof createdAtRaw === 'string' && createdAtRaw.length > 0
+              ? createdAtRaw
+              : null;
+          const rowPercent = scorePercent(rec);
 
           if (lid === FINAL_EXAM_LESSON_ID) {
-            if (!finalRec || scorePercent(rec) > scorePercent(finalRec)) {
+            if (!finalRec || rowPercent > scorePercent(finalRec)) {
               finalRec = rec;
             }
           } else {
+            // Keep the best-scoring record (as before).
             const existing = lessonMap[lid];
-            if (!existing || scorePercent(rec) > scorePercent(existing)) {
+            if (!existing || rowPercent > scorePercent(existing)) {
               lessonMap[lid] = rec;
+            }
+
+            // Track the EARLIEST passing timestamp for this lesson.
+            if (
+              createdAt &&
+              rec.total > 0 &&
+              rowPercent >= PASS_THRESHOLD_PERCENT
+            ) {
+              const existingPass = firstPassMap[lid];
+              if (
+                !existingPass ||
+                new Date(createdAt).getTime() <
+                  new Date(existingPass).getTime()
+              ) {
+                firstPassMap[lid] = createdAt;
+              }
             }
           }
         }
 
         setLessonScores(lessonMap);
+        setLessonFirstPassDates(firstPassMap);
         setFinalScore(finalRec);
       } catch (e) {
         if (!cancelled) {
           console.error('[CoursePage] unexpected score fetch error:', e);
           setScoresError('ያልታወቀ ስህተት ተከስቷል።');
           setLessonScores({});
+          setLessonFirstPassDates({});
           setFinalScore(null);
         }
       } finally {
@@ -669,6 +738,49 @@ export default function CoursePage() {
     items.push({ type: 'finalExam', data: course.finalExam, id: 'final' });
     return items;
   }, [course]);
+
+  // -------------------------------------------------------------------------
+  // DRIP-LOCK RESOLVER
+  //
+  // Given a lesson's 0-based index within `course.lessons`, returns whether
+  // it is locked and, if so, the reason:
+  //
+  //   • index === 0                    → always UNLOCKED
+  //   • previous lesson not yet passed → LOCKED ("complete previous lesson")
+  //   • previous lesson passed TODAY   → LOCKED ("come back tomorrow")
+  //   • previous lesson passed earlier → UNLOCKED
+  //
+  // While `scoresLoading` is true we deliberately treat every lesson as
+  // unlocked so the initial render doesn't briefly flash incorrect lock
+  // states before the fetch completes.
+  // -------------------------------------------------------------------------
+  const resolveLock = (
+    index: number
+  ): { locked: boolean; reason: 'previous' | 'tomorrow' | null } => {
+    if (scoresLoading) return { locked: false, reason: null };
+    if (index <= 0) return { locked: false, reason: null };
+
+    const prevLesson = course.lessons[index - 1];
+    if (!prevLesson) return { locked: false, reason: null };
+
+    const prevNum = lessonIdToNumber(prevLesson.id);
+    if (prevNum === null) return { locked: false, reason: null };
+
+    const prevPassDate = lessonFirstPassDates[prevNum];
+    if (!prevPassDate) return { locked: true, reason: 'previous' };
+
+    const passDate = new Date(prevPassDate);
+    if (Number.isNaN(passDate.getTime())) {
+      // Unparseable timestamp — be permissive rather than blocking.
+      return { locked: false, reason: null };
+    }
+
+    if (isSameCalendarDay(passDate, new Date())) {
+      return { locked: true, reason: 'tomorrow' };
+    }
+
+    return { locked: false, reason: null };
+  };
 
   return (
     <div
@@ -819,7 +931,7 @@ export default function CoursePage() {
         )}
 
         <div className="space-y-3">
-          {timelineItems.map((item) => {
+          {timelineItems.map((item, idx) => {
             // ---------------------------------------------------------
             // LESSON ROW
             // ---------------------------------------------------------
@@ -830,6 +942,15 @@ export default function CoursePage() {
                 lessonNum !== null ? lessonScores[lessonNum] : undefined;
               const completed = !!score;
               const passed = score ? isPassed(score) : false;
+
+              // ---------------------------------------------------------
+              // DRIP-LOCK — decide whether this lesson is available.
+              // `idx` matches the lesson's 0-based index within
+              // `course.lessons` because lessons are pushed first, in
+              // order, into `timelineItems`.
+              // ---------------------------------------------------------
+              const lock = resolveLock(idx);
+              const isLocked = lock.locked;
 
               // Build the numeric lesson id for the `[lessonId]` segment.
               // e.g. "lesson-2" → 2. Falls back to the raw slug safely if
@@ -847,13 +968,17 @@ export default function CoursePage() {
                   key={item.id}
                   className={[
                     'flex items-center gap-3 sm:gap-4 rounded-xl p-4 border transition-all duration-200',
-                    completed
+                    isLocked
+                      ? 'bg-slate-50 dark:bg-slate-900/60 border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40'
+                      : completed
                       ? 'bg-emerald-50/60 border-emerald-200/80 shadow-sm dark:bg-emerald-500/[0.06] dark:border-emerald-500/20 dark:shadow-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'
                       : 'bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40 hover:bg-slate-100/80 dark:hover:bg-slate-800/90',
                   ].join(' ')}
                 >
                   <div className="flex-shrink-0">
-                    {completed ? (
+                    {isLocked ? (
+                      <Lock className="h-6 w-6 text-slate-400 dark:text-slate-500" />
+                    ) : completed ? (
                       <CheckCircle2 className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
                     ) : (
                       <BookOpen className="h-6 w-6 text-slate-400 dark:text-slate-500" />
@@ -862,10 +987,17 @@ export default function CoursePage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                      <p
+                        className={[
+                          'font-semibold truncate',
+                          isLocked
+                            ? 'text-slate-500 dark:text-slate-400'
+                            : 'text-slate-800 dark:text-slate-200',
+                        ].join(' ')}
+                      >
                         {lesson.title}
                       </p>
-                      {score && (
+                      {score && !isLocked && (
                         <span
                           className={[
                             'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] sm:text-xs font-bold whitespace-nowrap border',
@@ -880,26 +1012,52 @@ export default function CoursePage() {
                         </span>
                       )}
                     </div>
+
+                    {/* Drip-lock reason line — only rendered when locked */}
+                    {isLocked && (
+                      <p className="mt-1 text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 flex items-start gap-1.5 leading-snug">
+                        <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                        <span>
+                          {lock.reason === 'tomorrow'
+                            ? amh.comeBackTomorrow
+                            : amh.completePrevious}
+                        </span>
+                      </p>
+                    )}
                   </div>
 
-                  {/* Clean Next.js Link — no preventDefault/onClick override
-                      so the App Router handles soft navigation natively. */}
-                  <Link
-                    href={lessonHref}
-                    prefetch={false}
-                    aria-label={completed ? amh.retry : amh.startLesson}
-                    className={[
-                      'flex-shrink-0 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium transition flex items-center gap-1',
-                      completed
-                        ? 'bg-white dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-500/20'
-                        : 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950',
-                    ].join(' ')}
-                  >
-                    <PlayCircle className="h-4 w-4" />
-                    <span className="hidden sm:inline">
-                      {completed ? amh.retry : amh.startLesson}
-                    </span>
-                  </Link>
+                  {/* Locked → disabled button (no navigation).
+                      Unlocked → clean Next.js Link so the App Router
+                      handles soft navigation natively. */}
+                  {isLocked ? (
+                    <button
+                      type="button"
+                      disabled
+                      aria-disabled="true"
+                      aria-label={amh.locked}
+                      className="flex-shrink-0 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 cursor-not-allowed select-none"
+                    >
+                      <Lock className="h-4 w-4" />
+                      <span className="hidden sm:inline">{amh.locked}</span>
+                    </button>
+                  ) : (
+                    <Link
+                      href={lessonHref}
+                      prefetch={false}
+                      aria-label={completed ? amh.retry : amh.startLesson}
+                      className={[
+                        'flex-shrink-0 px-3 sm:px-4 py-2 rounded-xl text-sm font-medium transition flex items-center gap-1',
+                        completed
+                          ? 'bg-white dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-500/20'
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950',
+                      ].join(' ')}
+                    >
+                      <PlayCircle className="h-4 w-4" />
+                      <span className="hidden sm:inline">
+                        {completed ? amh.retry : amh.startLesson}
+                      </span>
+                    </Link>
+                  )}
                 </div>
               );
             }
@@ -911,6 +1069,9 @@ export default function CoursePage() {
             // `/courses/<id>/lessons/final` — the lesson page handles
             // the `final` slug by fetching all questions, shuffling,
             // and slicing to MAX_FINAL_EXAM_QUESTIONS.
+            //
+            // The drip-lock system applies to daily lessons only, so
+            // the final exam remains reachable exactly as before.
             // ---------------------------------------------------------
             const finalCompleted = !!finalScore;
             const finalPassed = finalScore ? isPassed(finalScore) : false;
