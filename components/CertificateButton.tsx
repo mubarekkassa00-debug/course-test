@@ -65,7 +65,7 @@ const PASS_THRESHOLD_PERCENT = 50;
  * Amharic missing-reason message shown to the student.
  */
 const REQUIRED_COURSES: { slug: string; label: string }[] = [
-  { slug: 'usul_al_thalatha', label: 'ዩሱል አል-ሠላሠ' },
+  { slug: 'usul_al_thalatha', label: 'ኡሱል አል-ሠላሠ' },
   { slug: 'arbain', label: 'አርባኢን' },
   { slug: 'shurut_as_salah', label: 'ሹሩጥ አስ-ሶላህ' },
   { slug: 'urjuzat', label: 'ኡርጁዘህ' },
@@ -83,7 +83,7 @@ const NOT_ELIGIBLE_HEADLINE =
  * quiz attempts.
  */
 const MISSING_COURSES_REASON =
-  'አራቱንም ኪታቦች (ዩሱል አል-ሠላሠ፣ አርባኢን፣ ሹሩጥ አስ-ሶላህ፣ ኡርጁዘህ) ማጠናቀቅ አለብዎት።';
+  'አራቱንም ኪታቦች (ኡሱል አል-ሠላሠ፣ አርባኢን፣ ሹሩጥ አስ-ሶላህ፣ ኡርጁዘህ) ማጠናቀቅ አለብዎት።';
 
 /**
  * Default question count used when the `lessons` table does not expose a
