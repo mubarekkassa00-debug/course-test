@@ -31,6 +31,8 @@ import {
   Menu,
   X,
   Trophy,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 
 interface Lesson {
@@ -62,6 +64,13 @@ interface SavedScore {
   total: number;
   percentage: number;
 }
+
+// ---------------------------------------------------------------------------
+// PASS THRESHOLD — shared with the rest of the app.
+// A quiz is considered "passed" when the student earns >= 50% on an attempt.
+// Once passed, the quiz can no longer be retaken.
+// ---------------------------------------------------------------------------
+const PASS_THRESHOLD_PERCENT = 50;
 
 // ---------------------------------------------------------------------------
 // FINAL EXAM CONSTANTS & HELPERS
@@ -1152,6 +1161,23 @@ export default function LessonPage() {
   const [savedScore, setSavedScore] = useState<SavedScore | null>(null);
   const [loadingSavedScore, setLoadingSavedScore] = useState(false);
 
+  // ------------------------------------------------------------------
+  // RETAKE LOCK — derived from the previously saved score.
+  //
+  //   hasPassedBefore → the student already earned >= 50% on this quiz.
+  //                     The quiz UI must be LOCKED (read-only) and the
+  //                     submit button must not be shown.
+  //   hasFailedBefore → the student previously scored < 50%. The quiz
+  //                     stays fully unlocked so they can retake it.
+  // ------------------------------------------------------------------
+  const hasPassedBefore =
+    savedScore !== null &&
+    savedScore.percentage >= PASS_THRESHOLD_PERCENT;
+
+  const hasFailedBefore =
+    savedScore !== null &&
+    savedScore.percentage < PASS_THRESHOLD_PERCENT;
+
   // Mark component as mounted to avoid hydration mismatch
   useEffect(() => {
     setHasMounted(true);
@@ -1421,7 +1447,9 @@ export default function LessonPage() {
     questionId: string | number,
     optionText: string
   ) => {
-    if (quizSubmitted || submittingQuiz) return;
+    // Block any interaction if the quiz has been submitted OR the
+    // student has already passed the quiz before.
+    if (quizSubmitted || submittingQuiz || hasPassedBefore) return;
     setSelectedAnswers((prev) => ({ ...prev, [String(questionId)]: optionText }));
   };
 
@@ -1441,6 +1469,9 @@ export default function LessonPage() {
   // ------------------------------------------------------------------
   const handleSubmitQuiz = async () => {
     if (!questions.length || !lesson || submittingQuiz) return;
+
+    // Hard guard: a passed quiz cannot be retaken.
+    if (hasPassedBefore) return;
 
     setSubmittingQuiz(true);
 
@@ -1628,10 +1659,17 @@ export default function LessonPage() {
             </h1>
             {/* Show previously saved score from quiz_results */}
             {savedScore && (
-              <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-[11px] font-medium">
+              <div
+                className={[
+                  'mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-medium',
+                  hasPassedBefore
+                    ? 'bg-emerald-950 border-emerald-800 text-emerald-300'
+                    : 'bg-amber-950 border-amber-800 text-amber-300',
+                ].join(' ')}
+              >
                 <Trophy className="h-3 w-3" />
                 ውጤት፡ {savedScore.score}/{savedScore.total}
-                <span className="text-emerald-500/80">
+                <span className="opacity-80">
                   ({savedScore.percentage}%)
                 </span>
               </div>
@@ -1725,9 +1763,17 @@ export default function LessonPage() {
           <div className="flex-shrink-0 p-3 bg-slate-900 border-t border-slate-800">
             {lesson.audioUrl ? (
               <div className="mb-3">
+                {/*
+                  Audio element with download restrictions:
+                  • controlsList="nodownload"   → removes native download UI
+                  • onContextMenu preventDefault → blocks right-click "Save audio as…"
+                  • No direct download button or link is exposed in the UI
+                */}
                 <audio
                   ref={audioRef}
                   controls
+                  controlsList="nodownload"
+                  onContextMenu={(e) => e.preventDefault()}
                   className="w-full rounded-lg"
                   src={lesson.audioUrl}
                   preload="metadata"
@@ -1784,10 +1830,15 @@ export default function LessonPage() {
                 <button
                   type="button"
                   onClick={goToQuiz}
-                  className="w-full py-3 bg-emerald-600 active:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
+                  className={[
+                    'w-full py-3 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg',
+                    hasPassedBefore
+                      ? 'bg-emerald-700 active:bg-emerald-800'
+                      : 'bg-emerald-600 active:bg-emerald-700',
+                  ].join(' ')}
                 >
                   <BookOpen className="h-5 w-5" />
-                  ፈተናውን ጀምር
+                  {hasPassedBefore ? 'ውጤትህን ተመልከት' : 'ፈተናውን ጀምር'}
                 </button>
               )}
 
@@ -1818,7 +1869,7 @@ export default function LessonPage() {
                 ፈተናውን ለመውሰድ እባክዎ ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
               </p>
             </div>
-          ) : loadingQuiz ? (
+          ) : loadingQuiz || loadingSavedScore ? (
             <div className="text-center py-8 text-slate-400">
               ጥያቄዎች በመጫን ላይ ናቸው...
             </div>
@@ -1847,12 +1898,59 @@ export default function LessonPage() {
               <h3 className="text-lg font-bold text-white mb-1">
                 {quiz?.title || (isFinalExam ? 'የመጨረሻ ፈተና' : 'የደርሱ ፈተና')}
               </h3>
-              <p className="text-xs text-slate-400 mb-4">
-                ጥያቄ {currentStep + 1} / {questions.length}
-              </p>
 
-              {!quizSubmitted ? (
+              {/* ------------------------------------------------
+                  PASSED LOCK — student already cleared 50%
+                  → show a green badge, block the quiz entirely,
+                    keep navigation buttons active.
+                 ------------------------------------------------ */}
+              {hasPassedBefore && !quizSubmitted ? (
+                <div className="mt-4 flex-1 flex flex-col items-center justify-center text-center gap-4">
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-300 text-sm font-semibold">
+                    <CheckCircle2 className="h-4 w-4" />
+                    በዚህ ፈተና አልፈዋል!
+                  </div>
+                  <p className="text-2xl font-bold text-emerald-400">
+                    ውጤትዎ፡ {savedScore?.score}/{savedScore?.total} (
+                    {savedScore?.percentage}%)
+                  </p>
+                  <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                    ውጤትዎ ከ {PASS_THRESHOLD_PERCENT}% በላይ ስለሆነ እንደገና መፈተን
+                    አይችሉም።
+                  </p>
+                  <button
+                    type="button"
+                    onClick={goToLesson}
+                    className="w-full py-3 bg-slate-800 active:bg-slate-700 text-white rounded-xl mt-4"
+                  >
+                    ወደ ደርሱ ተመለስ
+                  </button>
+                </div>
+              ) : !quizSubmitted ? (
                 <>
+                  {/* ------------------------------------------------
+                      FAILED retake banner — shown above the quiz
+                      when the student previously scored < 50%.
+                     ------------------------------------------------ */}
+                  {hasFailedBefore && (
+                    <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-700/70 bg-amber-950/40 px-3 py-2 text-amber-200 text-xs">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                      <div>
+                        <p className="font-semibold">
+                          የቀደመ ውጤትዎ፡ {savedScore?.score}/{savedScore?.total} (
+                          {savedScore?.percentage}%) — ከ {PASS_THRESHOLD_PERCENT}% በታች
+                        </p>
+                        <p className="mt-0.5 opacity-90">
+                          እንደገና ተፈትነው ከ {PASS_THRESHOLD_PERCENT}% በላይ ማግኘት ይችላሉ።
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-xs text-slate-400 mb-4">
+                    ጥያቄ {currentStep + 1} / {questions.length}
+                  </p>
+
                   <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-1 min-h-0 overflow-auto">
                     <p className="text-sm font-medium text-white mb-3">
                       {currentStep + 1}. {currentQuestion?.question_text}
@@ -1929,13 +2027,29 @@ export default function LessonPage() {
                             : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-60'
                         }`}
                       >
-                        {submittingQuiz ? 'አስረክብ...' : 'አስረክብ'}
+                        {submittingQuiz
+                          ? 'አስረክብ...'
+                          : hasFailedBefore
+                          ? 'እንደገና ተፈተን'
+                          : 'አስረክብ'}
                       </button>
                     )}
                   </div>
                 </>
               ) : (
+                /* After submission this session — show the result */
                 <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
+                  {/* Green "passed" celebration card if this attempt scored >= 50% */}
+                  {score !== null &&
+                    questions.length > 0 &&
+                    Math.round((score / questions.length) * 100) >=
+                      PASS_THRESHOLD_PERCENT && (
+                      <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-300 text-sm font-semibold">
+                        <CheckCircle2 className="h-4 w-4" />
+                        በዚህ ፈተና አልፈዋል!
+                      </div>
+                    )}
+
                   <p className="text-emerald-400 font-bold text-lg">
                     ውጤት፡ {score}/{questions.length}
                   </p>
@@ -1945,6 +2059,29 @@ export default function LessonPage() {
                       : 0}
                     %)
                   </p>
+
+                  {/* Passed → explain retake is closed */}
+                  {score !== null &&
+                    questions.length > 0 &&
+                    Math.round((score / questions.length) * 100) >=
+                      PASS_THRESHOLD_PERCENT && (
+                      <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                        ውጤትዎ ከ {PASS_THRESHOLD_PERCENT}% በላይ ስለሆነ እንደገና መፈተን
+                        አይችሉም።
+                      </p>
+                    )}
+
+                  {/* Failed → encourage retake */}
+                  {score !== null &&
+                    questions.length > 0 &&
+                    Math.round((score / questions.length) * 100) <
+                      PASS_THRESHOLD_PERCENT && (
+                      <p className="text-xs text-amber-400/90 max-w-xs leading-relaxed">
+                        ውጤትዎ ከ {PASS_THRESHOLD_PERCENT}% በታች ነው — ወደ ደርሱ ተመልሰው
+                        እንደገና መፈተን ይችላሉ።
+                      </p>
+                    )}
+
                   {savedScore && (
                     <p className="text-xs text-emerald-500/80">
                       ውጤትዎ በስርዓቱ ተቀምጧል — በደርሱ ገፅ ላይ ይታያል።
