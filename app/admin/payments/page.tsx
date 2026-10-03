@@ -1,9 +1,10 @@
 'use client';
-// app/admin/payments/AdminPaymentsClient.tsx
+// app/admin/payments/page.tsx (AdminPaymentsClient.tsx)
 //
 // Admin payment-approval dashboard — CLIENT component.
 //
 // Features:
+//   • Strict RBAC guard — only `profiles.role === 'admin'` may render the UI.
 //   • Loads every row from `public.payments` (newest first).
 //   • Enriches each row with the student's display name + email using a
 //     layered strategy:
@@ -26,9 +27,12 @@
 //   (b) move this enrichment behind a server API route.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import {
   ShieldCheck,
+  ShieldAlert,
   Loader2,
   AlertTriangle,
   CheckCircle2,
@@ -118,7 +122,7 @@ function formatDate(iso: string | null | undefined): string {
   });
 }
 
-/** Format an amount as "300 ETB" (or fallback if missing). */
+/** Format an amount as "200 ETB" (or fallback if missing). */
 function formatAmount(amount: number | string | null | undefined): string {
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) return '—';
@@ -167,6 +171,24 @@ function nameFromEmail(email: string | null | undefined): string {
 function resolveEmail(user: AuthUserLike | null | undefined): string {
   if (!user) return '';
   return typeof user.email === 'string' ? user.email.trim() : '';
+}
+
+/** Compact, error-message extractor for the RBAC guard. */
+function describeError(err: unknown): string {
+  if (!err) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object') {
+    const anyErr = err as { message?: unknown };
+    if (typeof anyErr.message === 'string' && anyErr.message.trim() !== '') {
+      return anyErr.message;
+    }
+    try {
+      return JSON.stringify(anyErr);
+    } catch {
+      return 'Unserializable error object';
+    }
+  }
+  return String(err);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,14 +263,110 @@ function StatCard({
 // ---------------------------------------------------------------------------
 
 export default function AdminPaymentsClient() {
+  const router = useRouter();
+
   // -------------------------------------------------------------------------
-  // State — always initialized to an empty array so it is never `null`.
+  // RBAC state
+  //
+  //   authLoading → true while we're still verifying auth + role.
+  //   userRole    → the confirmed profile role (or null).
+  //   authError   → set only when the profile lookup itself fails.
+  //
+  // The payments UI is rendered ONLY when `userRole === 'admin'`.
+  // -------------------------------------------------------------------------
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // -------------------------------------------------------------------------
+  // Payment state — always initialized to an empty array so it is never `null`.
   // -------------------------------------------------------------------------
   const [rows, setRows] = useState<PaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+  // -------------------------------------------------------------------------
+  // STRICT RBAC — AUTH + ADMIN GUARD
+  //
+  //   Flow:
+  //     a) supabase.auth.getUser() — authoritative session check.
+  //        → no user → router.replace('/login')
+  //          (authLoading stays true so nothing flashes before navigation).
+  //     b) SELECT role FROM profiles WHERE id = user.id
+  //        → query failure → authError set + authLoading cleared.
+  //        → role !== 'admin' → router.replace('/dashboard')
+  //          (authLoading stays true so nothing flashes before navigation).
+  //        → role === 'admin' → set userRole, clear authLoading.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+
+    const verifyAdmin = async () => {
+      try {
+        // ---------- (a) SESSION CHECK ----------
+        const {
+          data: { user },
+          error: userErr,
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (userErr || !user) {
+          console.error('[AdminPayments] getUser failed:', userErr);
+          // Keep authLoading true — the spinner remains until the redirect
+          // to /login completes, so protected content never flashes.
+          router.replace('/login');
+          return;
+        }
+
+        // ---------- (b) ROLE LOOKUP ----------
+        const { data: profile, error: profileErr } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        if (profileErr) {
+          console.error('[AdminPayments] role lookup failed:', profileErr);
+          setAuthError(`Role Lookup Error: ${describeError(profileErr)}`);
+          setAuthLoading(false);
+          return;
+        }
+
+        const role =
+          profile && typeof profile.role === 'string'
+            ? profile.role
+            : null;
+
+        if (role !== 'admin') {
+          // Non-admin (student / null role) → bounce to dashboard.
+          // Keep authLoading true so the spinner remains until the
+          // redirect completes and no protected data flashes.
+          router.replace('/dashboard');
+          return;
+        }
+
+        // ---------- (c) ADMIN CONFIRMED ----------
+        setUserRole('admin');
+        setAuthLoading(false);
+      } catch (err) {
+        if (!cancelled) {
+          console.error('[AdminPayments] RBAC verification error:', err);
+          setAuthError(`Auth Exception: ${describeError(err)}`);
+          setAuthLoading(false);
+        }
+      }
+    };
+
+    verifyAdmin();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   // -------------------------------------------------------------------------
   // Data loading
@@ -427,9 +545,12 @@ export default function AdminPaymentsClient() {
     }
   }, []);
 
+  // Gated on admin confirmation — never runs for non-admins.
   useEffect(() => {
-    loadPayments();
-  }, [loadPayments]);
+    if (userRole === 'admin' && !authError) {
+      loadPayments();
+    }
+  }, [userRole, authError, loadPayments]);
 
   // -------------------------------------------------------------------------
   // Actions
@@ -495,7 +616,75 @@ export default function AdminPaymentsClient() {
   }, [rows, statusFilter]);
 
   // -------------------------------------------------------------------------
-  // Render
+  // RBAC GATES — LOADING SPINNER / ACCESS DENIED
+  //
+  // CRITICAL: the payments UI is rendered ONLY after `userRole === 'admin'`
+  // is explicitly confirmed. Until then a full-screen spinner is shown so
+  // no protected content ever flashes.
+  // -------------------------------------------------------------------------
+
+  // (a) Verify-in-progress — spinner stays up until admin is confirmed
+  //     OR a redirect (login/dashboard) completes.
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
+            <ShieldCheck className="h-7 w-7 text-white" />
+          </div>
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            በማረጋገጥ ላይ ነው...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // (b) Role-lookup failure — no payments UI is rendered in this branch.
+  if (authError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-6">
+        <div className="max-w-md w-full rounded-2xl border border-red-200 dark:border-red-900/60 bg-white dark:bg-slate-900 p-6 shadow-sm">
+          <div className="flex items-center gap-3 mb-3">
+            <ShieldAlert className="h-6 w-6 text-red-500" />
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+              መግቢያ ተከልክሏል
+            </h2>
+          </div>
+          <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 break-words">
+            {authError}
+          </p>
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white"
+          >
+            ወደ ዳሽቦርድ ተመለስ
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // (c) Explicit admin gate — renders nothing (spinner) unless the role
+  //     has been confirmed. Final safety net that guarantees the protected
+  //     UI can never flash for a non-admin, even during the brief moment
+  //     between state updates and the router redirect.
+  if (userRole !== 'admin') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            በማረጋገጥ ላይ ነው...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Main render — reached only when userRole === 'admin'.
   // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100">

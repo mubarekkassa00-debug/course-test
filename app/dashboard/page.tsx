@@ -318,10 +318,10 @@ export default function DashboardPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // -------------------------------------------------------------------------
-  // USER ROLE — used to conditionally render the admin access card.
+  // USER ROLE — used to conditionally render the admin access cards.
   //
   // Fetched from `profiles.role` after auth verification succeeds. When
-  // null/undefined, the admin card is entirely omitted from the DOM.
+  // null/undefined, the admin section is entirely omitted from the DOM.
   // -------------------------------------------------------------------------
   const [userRole, setUserRole] = useState<string | null>(null);
 
@@ -477,10 +477,10 @@ export default function DashboardPage() {
   }, []);
 
   // -------------------------------------------------------------------------
-  // FETCH USER ROLE (for the conditional admin card)
+  // FETCH USER ROLE (for the conditional admin cards)
   //
   // Runs once the auth state resolves. A failure here is non-fatal: we
-  // simply leave `userRole` as null, which keeps the admin card hidden
+  // simply leave `userRole` as null, which keeps the admin section hidden
   // and preserves the standard student view.
   // -------------------------------------------------------------------------
   useEffect(() => {
@@ -499,7 +499,7 @@ export default function DashboardPage() {
 
         if (error) {
           console.warn(
-            '[Dashboard] role fetch error — admin card hidden:',
+            '[Dashboard] role fetch error — admin section hidden:',
             error.message
           );
           setUserRole(null);
@@ -510,7 +510,7 @@ export default function DashboardPage() {
       } catch (err) {
         if (!cancelled) {
           console.warn(
-            '[Dashboard] role fetch unexpected error — admin card hidden:',
+            '[Dashboard] role fetch unexpected error — admin section hidden:',
             readErrorMessage(err)
           );
           setUserRole(null);
@@ -1000,7 +1000,7 @@ export default function DashboardPage() {
                 <span>የኔ ሰርቲፊኬት</span>
               </Link>
 
-              {/* Admin access — only for role === 'admin' */}
+              {/* Admin Students — only for role === 'admin' */}
               {isAdmin && (
                 <Link
                   href="/admins/students"
@@ -1013,6 +1013,20 @@ export default function DashboardPage() {
                   <span>የተማሪዎች መቆጣጠሪያ (Admin)</span>
                 </Link>
               )}
+
+              {/* Admin Payments — only for role === 'admin' */}
+              {isAdmin && (
+                <Link
+                  href="/admin/payments"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-700 dark:hover:text-rose-300 transition-colors"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/60">
+                    <CreditCard className="h-4 w-4 text-rose-700 dark:text-rose-300" />
+                  </span>
+                  <span>የክፍያዎች መቆጣጠሪያ (Admin)</span>
+                </Link>
+              )}
             </nav>
           </div>
         )}
@@ -1023,39 +1037,65 @@ export default function DashboardPage() {
       {/* ================================================================= */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-5 sm:mt-6 pb-12">
         {/* ============================================================ */}
-        {/* ADMIN ACCESS CARD — only rendered when role === 'admin'       */}
+        {/* ADMIN QUICK-ACCESS SECTION — only when role === 'admin'      */}
         {/* ============================================================ */}
         {isAdmin && (
-          <Link
-            href="/admins/students"
-            className="mb-5 sm:mb-6 group relative block overflow-hidden rounded-2xl border border-indigo-300 dark:border-indigo-800 bg-gradient-to-r from-indigo-50 to-indigo-100/60 dark:from-indigo-950/50 dark:to-indigo-900/25 p-4 sm:p-5 shadow-sm hover:shadow-md hover:border-indigo-400 dark:hover:border-indigo-700 transition-all duration-300"
-          >
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-              <div className="flex items-start gap-3 flex-1 min-w-0">
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 shadow-lg shadow-indigo-900/20">
-                  <ShieldCheck className="h-6 w-6 text-white" />
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-indigo-300 dark:border-indigo-800 bg-gradient-to-br from-indigo-50/70 to-indigo-100/40 dark:from-indigo-950/40 dark:to-indigo-900/20 p-4 sm:p-5 shadow-sm">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 shadow-md shadow-indigo-900/20">
+                <ShieldCheck className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm sm:text-base font-extrabold text-indigo-900 dark:text-indigo-100">
+                  የአስተዳዳሪ መቆጣጠሪያ ማዕከል
+                </p>
+                <p className="text-[11px] sm:text-xs text-indigo-800/80 dark:text-indigo-200/75 leading-relaxed">
+                  የተማሪዎችን የትምህርት ሂደትና የክፍያ ሁኔታ ይከታተሉ
+                </p>
+              </div>
+              <span className="hidden sm:inline-flex items-center gap-1 rounded-full bg-indigo-600 text-white text-[10px] font-bold px-2.5 py-0.5 flex-shrink-0">
+                ADMIN
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* CARD 1 — Admin Students */}
+              <Link
+                href="/admins/students"
+                className="group relative flex items-start gap-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-white dark:bg-slate-900/60 p-4 hover:border-indigo-400 dark:hover:border-indigo-700 hover:shadow-md transition-all duration-300"
+              >
+                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-900/60">
+                  <ShieldCheck className="h-5 w-5 text-indigo-700 dark:text-indigo-300" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm sm:text-base font-bold text-indigo-900 dark:text-indigo-100">
-                      የተማሪዎች መቆጣጠሪያ (Admin)
-                    </p>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5">
-                      ADMIN
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-xs sm:text-sm text-indigo-800/90 dark:text-indigo-200/80 leading-relaxed">
+                  <p className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-indigo-700 dark:group-hover:text-indigo-300 transition-colors">
+                    የተማሪዎች መቆጣጠሪያ
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                     የተማሪዎችን የትምህርት ሂደትና ውጤት ይከታተሉ
                   </p>
                 </div>
-              </div>
+              </Link>
 
-              <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 group-hover:bg-indigo-700 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-indigo-900/20 transition-colors flex-shrink-0">
-                <ShieldCheck className="h-4 w-4" />
-                ክፈት
-              </span>
+              {/* CARD 2 — Admin Payments */}
+              <Link
+                href="/admin/payments"
+                className="group relative flex items-start gap-3 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-white dark:bg-slate-900/60 p-4 hover:border-rose-400 dark:hover:border-rose-700 hover:shadow-md transition-all duration-300"
+              >
+                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-rose-100 dark:bg-rose-900/60">
+                  <CreditCard className="h-5 w-5 text-rose-700 dark:text-rose-300" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-rose-700 dark:group-hover:text-rose-300 transition-colors">
+                    የክፍያዎች መቆጣጠሪያ
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    የተማሪዎችን የክፍያ ደረሰኞች ያጽድቁ ወይም ውድቅ ያድርጉ
+                  </p>
+                </div>
+              </Link>
             </div>
-          </Link>
+          </div>
         )}
 
         {/* ============================================================ */}
@@ -1104,6 +1144,59 @@ export default function DashboardPage() {
                   ይጠብቁ።
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* CERTIFICATE DOWNLOAD ERROR / SUCCESS TOASTS                  */}
+        {/*                                                              */}
+        {/* The big certificate card has been moved into the mobile      */}
+        {/* hamburger drawer. Only the small inline toasts remain here  */}
+        {/* so the student gets feedback when they tap the menu item.   */}
+        {/* ============================================================ */}
+        {certError && !certLoading && (
+          <div
+            role="alert"
+            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
+            <div className="flex-1">
+              <p className="font-semibold">
+                ሰርቲፊኬቱን ማዘጋጀት አልተቻለም
+              </p>
+              <p className="mt-0.5 whitespace-pre-line leading-relaxed">
+                {certError}
+              </p>
+              <button
+                type="button"
+                onClick={() => setCertError(null)}
+                className="mt-2 text-xs font-semibold underline hover:no-underline"
+              >
+                ዝጋ
+              </button>
+            </div>
+          </div>
+        )}
+
+        {certSuccess && !certLoading && !certError && (
+          <div
+            role="status"
+            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-emerald-300 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300"
+          >
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
+            <div className="flex-1">
+              <p className="font-semibold">
+                ሰርቲፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል!
+              </p>
+              <p className="mt-0.5 leading-relaxed">{certSuccess}</p>
+              <button
+                type="button"
+                onClick={() => setCertSuccess(null)}
+                className="mt-2 text-xs font-semibold underline hover:no-underline"
+              >
+                ዝጋ
+              </button>
             </div>
           </div>
         )}
@@ -1440,7 +1533,7 @@ export default function DashboardPage() {
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
-              የቴሌግራም ቻናላችንን ይቀላሉ
+              የቴሌግራም ቻናላችንን ይቀላቀሉ
             </h3>
           </div>
           <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
