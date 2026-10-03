@@ -1,8 +1,10 @@
 'use client';
 
 // app/page.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 import {
   BookOpen,
   Mic,
@@ -28,6 +30,7 @@ import {
   ChevronDown,
   HelpCircle,
   LogIn,
+  Loader2,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -361,8 +364,63 @@ const SOCIALS = [
 // ---------------------------------------------------------------------------
 
 export default function LandingPage() {
+  const router = useRouter();
   const [lang, setLang] = useState<Lang>('am');
   const [openFaq, setOpenFaq] = useState<number | null>(0);
+
+  // ---------------------------------------------------------------------------
+  // AUTH-GATE STATE
+  //
+  // `checkingAuth` starts as `true` on both server and client so the very
+  // first paint is deterministic (no hydration mismatch). While it's true we
+  // render a lightweight centered loader instead of the landing page. This
+  // prevents an authenticated user from ever briefly seeing the marketing
+  // page before the redirect fires.
+  //
+  // Once the check resolves:
+  //   • Logged-in user → router.replace('/dashboard') and the loader stays
+  //     on screen until navigation completes.
+  //   • Guest          → `checkingAuth` flips to false and the landing page
+  //     renders exactly as it did before.
+  // ---------------------------------------------------------------------------
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkSession = async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (user) {
+          // Authenticated → send to the dashboard. Keep `checkingAuth`
+          // true so the loader remains visible until the route changes.
+          router.replace('/dashboard');
+          return;
+        }
+
+        // Guest → reveal the landing page.
+        setCheckingAuth(false);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[Landing] session check failed:', err);
+          // On unexpected error, fall through to the landing page rather
+          // than trapping the user on a loader.
+          setCheckingAuth(false);
+        }
+      }
+    };
+
+    checkSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
   const t = translations[lang];
 
   const toggleLang = () => setLang((prev) => (prev === 'en' ? 'am' : 'en'));
@@ -376,6 +434,24 @@ export default function LandingPage() {
     { href: '/library', label: t.nav.library },
     { href: '/about', label: t.nav.about },
   ];
+
+  // -------------------------------------------------------------------------
+  // Auth-check loader — shown until Supabase confirms the guest/user state.
+  // Mirrors the loader pattern used across the rest of the app (dark-mode
+  // aware, brand-colored spinner, centered full-screen).
+  // -------------------------------------------------------------------------
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
+            <GraduationCap className="h-7 w-7 text-white" />
+          </div>
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-600 dark:text-emerald-400" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100">
