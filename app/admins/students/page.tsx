@@ -1,1378 +1,1404 @@
-// app/dashboard/page.tsx
+// app/admins/students/page.tsx
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { createBrowserClient } from '@supabase/ssr';
 import {
-  BookOpen,
-  Mic,
-  GraduationCap,
-  Library,
-  Lock,
-  LogOut,
-  User,
-  Sparkles,
-  Loader2,
-  Sun,
-  Moon,
-  Calendar,
-  CheckCircle2,
-  Circle,
-  Award,
-  Clock,
+  Search,
   Download,
-  AlertTriangle,
-  Send,
-  Menu,
+  CheckCircle,
+  BookOpen,
+  Phone,
+  Mail,
+  Loader2,
   X,
-  CreditCard,
+  Users,
+  RefreshCw,
+  ChevronRight,
+  Calendar,
+  Award,
+  AlertTriangle,
+  ShieldAlert,
+  ShieldCheck,
+  GraduationCap,
+  TrendingUp,
+  BarChart3,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// CONFIGURABLE VISUAL ASSET
+// Supabase browser client (module-level singleton)
 // ---------------------------------------------------------------------------
-// Swap this URL to change the dashboard hero background image.
-// Accepts any HTTPS image URL (Cloudinary, Unsplash, CDN) or a local path
-// like '/images/hero.jpg' served from /public.
-const HERO_IMAGE_URL =
-  'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?auto=format&fit=crop&w=1600&q=80';
-
-// ---------------------------------------------------------------------------
-// Types & Constants
-// ---------------------------------------------------------------------------
-
-type DashboardUser = {
-  id?: string;
-  email?: string;
-  full_name?: string;
-};
-
-type CourseStatus = 'not_started' | 'in_progress' | 'passed';
-
-interface CourseProgress {
-  slug: string;
-  displayName: string;
-  bestPercent: number;
-  status: CourseStatus;
-}
-
-/** Shape of an entry in the dynamic course catalogue. */
-interface CourseMeta {
-  slug: string;
-  displayName: string;
-}
-
-type PaymentStatus = 'none' | 'pending' | 'approved' | 'rejected';
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 // ---------------------------------------------------------------------------
-// Fallback course catalogue (4 required books).
-//
-// This is used ONLY when the dynamic fetch from Supabase fails, so the
-// dashboard never renders empty. When the fetch succeeds, the live list
-// replaces this fallback everywhere (progress cards, header count, etc.).
+// Constants — the 4 required Kitabs of Basira
 // ---------------------------------------------------------------------------
-
-const REQUIRED_COURSES: CourseMeta[] = [
+const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   { slug: 'usul_al_thalatha', displayName: 'ኡሱሉ ሰላሳ' },
   { slug: 'arbain', displayName: 'አርባኢን ነወዊ' },
   { slug: 'shurut_as_salah', displayName: 'ሹሩጡ ሶላት' },
   { slug: 'urjuzat', displayName: 'ኡርጁዘቱል ሚኢያህ' },
 ];
 
-/** Minimum percentage required to pass a course (matches backend). */
+const COURSE_NAME_BY_SLUG = new Map(
+  REQUIRED_COURSES.map((c) => [c.slug, c.displayName])
+);
+
 const PASS_THRESHOLD_PERCENT = 50;
 
 // ---------------------------------------------------------------------------
-// EXACT COURSE CAPACITY MODEL
+// Types
 // ---------------------------------------------------------------------------
-// Total curriculum capacity (in questions) per course slug:
-//   (lessons × 5 questions per lesson) + 30 final-exam questions.
-//
-//   • usul_al_thalatha  → 11 lessons × 5 = 55  + 30 = 85
-//   • arbain            → 11 lessons × 5 = 55  + 30 = 85
-//   • shurut_as_salah   →  7 lessons × 5 = 35  + 30 = 65
-//   • urjuzat           → 25 lessons × 5 = 125 + 30 = 155
-//
-// Progress for each course = (sum of earned scores across ALL attempts)
-// ÷ (this fixed capacity). This prevents the "one lesson passed = whole
-// course passed" bug: a 3/5 score on lesson 1 of Usul al-Thalatha yields
-// 3/85 ≈ 4%, not 60%.
-// ---------------------------------------------------------------------------
-const COURSE_CAPACITY: Record<string, number> = {
-  usul_al_thalatha: 85,
-  arbain: 85,
-  shurut_as_salah: 65,
-  urjuzat: 155,
-};
-
-/** Fallback capacity for any slug not present in the map above. */
-const DEFAULT_COURSE_CAPACITY = 85;
-
-/** Resolve the total curriculum capacity for a given course slug. */
-function getCourseCapacity(slug: string): number {
-  const explicit = COURSE_CAPACITY[slug];
-  if (typeof explicit === 'number' && explicit > 0) return explicit;
-  return DEFAULT_COURSE_CAPACITY;
+interface ProfileRow {
+  id: string;
+  full_name: string | null;
+  phone: string | null;
+  email: string | null;
+  role: string | null;
+  created_at: string | null;
 }
 
-// Amharic month names for Hijri calendar (1-indexed)
-const hijriMonthsAmh: string[] = [
-  'ሙሐረም',
-  'ሰፈር',
-  'ረቢዑል አወል',
-  'ረቢዑስ ሳኒ',
-  'ጀማዱል አወል',
-  'ጀማዱል አኺር',
-  'ረጀብ',
-  'ሸዕባን',
-  'ረመዷን',
-  'ሸወል',
-  'ዙልቀዕዳ',
-  'ዙልሒጃ',
-];
-
-// ---------------------------------------------------------------------------
-// Hijri date helper
-// ---------------------------------------------------------------------------
-function getHijriDate(): string {
-  try {
-    const today = new Date();
-    const formatter = new Intl.DateTimeFormat(
-      'en-SA-u-ca-islamic-umalqura-nu-latn',
-      {
-        year: 'numeric',
-        month: 'numeric',
-        day: 'numeric',
-      }
-    );
-    const parts = formatter.formatToParts(today);
-
-    let day = '1';
-    let month = '1';
-    let year = '1448';
-
-    for (const part of parts) {
-      if (part.type === 'day') day = part.value;
-      else if (part.type === 'month') month = part.value;
-      else if (part.type === 'year') year = part.value;
-    }
-
-    const monthIndex = parseInt(month, 10) - 1;
-    const amhMonth =
-      hijriMonthsAmh[monthIndex] || `ሙሐረም (${monthIndex + 1})`;
-
-    return `${day} ${amhMonth} ${year} ዓ.ሂ`;
-  } catch {
-    const now = new Date();
-    const fallbackDay = now.getDate();
-    return `${fallbackDay} ሙሐረም 1448 ዓ.ሂ`;
-  }
+interface QuizRow {
+  user_id: string;
+  course_id: string;
+  score: number | null;
+  total_questions: number | null;
+  created_at: string | null;
 }
 
+interface LessonEntry {
+  lessonNumber: number;
+  score: number;
+  total: number;
+  percent: number;
+  passed: boolean;
+  date: string | null;
+}
+
+interface CourseBreakdown {
+  courseId: string;
+  courseName: string;
+  lessons: LessonEntry[];
+  bestPercent: number;
+  averagePercent: number;
+  passed: boolean;
+  lastDate: string | null;
+}
+
+interface StudentRow {
+  id: string;
+  fullName: string;
+  phone: string;
+  email: string;
+  registeredAt: string | null;
+  role: string;
+  totalCourses: number;
+  passedCount: number;
+  progressPercent: number;
+  averageScore: number;
+  attemptsCount: number;
+  currentCourseName: string | null;
+  currentLessonNumber: number | null;
+  breakdown: CourseBreakdown[];
+}
+
+type FilterKey = 'all' | 'in_progress' | 'completed';
+
 // ---------------------------------------------------------------------------
-// Progress normalizers
+// Helpers
 // ---------------------------------------------------------------------------
 
-function computePercent(score: unknown, totalQuestions: unknown): number {
+function computePercent(score: unknown, total: unknown): number {
   const s = Number(score) || 0;
-  const t = Number(totalQuestions) || 0;
+  const t = Number(total) || 0;
   if (t <= 0) return 0;
   return Math.round((s / t) * 100);
 }
 
-/**
- * Build the per-course progress list.
- *
- * AGGREGATION RULE (FIXED):
- *   For each course_id, sum the earned `score` across ALL quiz_results
- *   rows, then divide by the EXACT fixed curriculum capacity for that
- *   course (COURSE_CAPACITY[slug] — lessons×5 + 30 final-exam questions),
- *   NOT by the questions of only the attempted quizzes:
- *
- *       coursePercent = Math.round((totalEarnedScore / capacity) * 100)
- *
- *   The result is capped at 100% so a student who somehow earns more
- *   points than the nominal capacity still sees 100%.
- *
- * STATUS RULES:
- *   • 'passed'      → coursePercent >= PASS_THRESHOLD_PERCENT (50%).
- *                     Student has earned at least 50% of the ENTIRE
- *                     course's total curriculum capacity.
- *   • 'in_progress' → at least one quiz row exists for the course AND
- *                     coursePercent < 50%.
- *   • 'not_started' → no quiz rows exist, or totalEarnedScore === 0.
- *
- * The `catalogue` argument drives which books are displayed.
- */
-function buildCourseProgress(
-  rawRows: any[],
-  catalogue: CourseMeta[]
-): CourseProgress[] {
-  // Sum earned scores per course across ALL quiz rows. The per-row
-  // `total_questions` value is deliberately NOT summed into the
-  // denominator — the denominator is the fixed course capacity.
-  const earnedByCourse = new Map<string, number>();
-
-  for (const row of rawRows || []) {
-    const slug = String(row?.course_id ?? '');
-    if (!slug) continue;
-
-    const score = Number(row?.score) || 0;
-    earnedByCourse.set(slug, (earnedByCourse.get(slug) ?? 0) + score);
+function formatDateAmh(iso: string | null): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}/${mm}/${dd}`;
+  } catch {
+    return '—';
   }
-
-  return catalogue.map(({ slug, displayName }) => {
-    const totalEarnedScore = earnedByCourse.get(slug) ?? 0;
-    const capacity = getCourseCapacity(slug);
-
-    // No attempts → not started.
-    if (totalEarnedScore <= 0 || capacity <= 0) {
-      return {
-        slug,
-        displayName,
-        bestPercent: 0,
-        status: 'not_started' as CourseStatus,
-      };
-    }
-
-    // Overall course progress against the FULL curriculum capacity,
-    // clamped so it never exceeds 100%.
-    const coursePercent = Math.min(
-      100,
-      Math.round((totalEarnedScore / capacity) * 100)
-    );
-
-    // 'passed' requires >= 50% of the ENTIRE course capacity.
-    let status: CourseStatus = 'in_progress';
-    if (coursePercent >= PASS_THRESHOLD_PERCENT) status = 'passed';
-
-    return {
-      slug,
-      displayName,
-      bestPercent: coursePercent,
-      status,
-    };
-  });
 }
 
-function readErrorMessage(err: unknown): string {
+function describeError(err: unknown): string {
   if (!err) return 'Unknown error';
   if (typeof err === 'string') return err;
+
   if (typeof err === 'object') {
-    const anyErr = err as {
+    const e = err as {
       message?: unknown;
       code?: unknown;
       details?: unknown;
       hint?: unknown;
+      error_description?: unknown;
+      status?: unknown;
     };
-    if (typeof anyErr.message === 'string' && anyErr.message.trim() !== '') {
-      return anyErr.message;
-    }
+
+    const parts: string[] = [];
+    if (e.message) parts.push(`Message: ${String(e.message)}`);
+    if (e.code) parts.push(`Code: ${String(e.code)}`);
+    if (e.details) parts.push(`Details: ${String(e.details)}`);
+    if (e.hint) parts.push(`Hint: ${String(e.hint)}`);
+    if (e.error_description)
+      parts.push(`Desc: ${String(e.error_description)}`);
+    if (e.status) parts.push(`Status: ${String(e.status)}`);
+
+    if (parts.length > 0) return parts.join(' | ');
+
     try {
-      return JSON.stringify(anyErr);
+      return JSON.stringify(err);
     } catch {
       return 'Unserializable error object';
     }
   }
+
   return String(err);
 }
 
-/** Build a filesystem-safe filename for the downloaded certificate PDF. */
-function buildCertificateFilename(studentName: string): string {
-  const safe = studentName
-    .trim()
-    .replace(/\s+/g, '_')
-    .replace(/[^A-Za-z0-9_-]/g, '');
-  return `Basira_Certificate_${safe || 'Student'}.pdf`;
+function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
+  const byCourse = new Map<string, QuizRow[]>();
+  for (const r of rows) {
+    const slug = String(r.course_id ?? '');
+    if (!slug) continue;
+    const arr = byCourse.get(slug) ?? [];
+    arr.push(r);
+    byCourse.set(slug, arr);
+  }
+
+  const breakdowns: CourseBreakdown[] = [];
+
+  for (const [slug, arr] of byCourse.entries()) {
+    const ordered = [...arr].sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return ta - tb;
+    });
+
+    const lessons: LessonEntry[] = ordered.map((r, idx) => {
+      const s = Number(r.score) || 0;
+      const t = Number(r.total_questions) || 0;
+      const pct = computePercent(s, t);
+      return {
+        lessonNumber: idx + 1,
+        score: s,
+        total: t,
+        percent: pct,
+        passed: pct >= PASS_THRESHOLD_PERCENT,
+        date: r.created_at,
+      };
+    });
+
+    const percents = lessons.map((l) => l.percent);
+    const bestPercent = percents.length > 0 ? Math.max(...percents) : 0;
+    const averagePercent =
+      percents.length > 0
+        ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
+        : 0;
+
+    const lastDate = ordered[ordered.length - 1]?.created_at ?? null;
+
+    breakdowns.push({
+      courseId: slug,
+      courseName: COURSE_NAME_BY_SLUG.get(slug) ?? slug,
+      lessons,
+      bestPercent,
+      averagePercent,
+      passed: bestPercent >= PASS_THRESHOLD_PERCENT,
+      lastDate,
+    });
+  }
+
+  breakdowns.sort((a, b) => {
+    const ta = a.lastDate ? new Date(a.lastDate).getTime() : 0;
+    const tb = b.lastDate ? new Date(b.lastDate).getTime() : 0;
+    return tb - ta;
+  });
+
+  return breakdowns;
+}
+
+function downloadCSV(rows: StudentRow[]) {
+  const headers = [
+    'ስም',
+    'ስልክ',
+    'ኢሜይል',
+    'የተመዘገቡበት',
+    'የጨረሷቸው ኪታቦች',
+    'እድገት %',
+    'አማካይ ነጥብ %',
+    'ጠቅላላ ሙከራዎች',
+    'ዝርዝር ውጤቶች',
+  ];
+
+  const escape = (v: unknown) => {
+    const s = String(v ?? '');
+    if (s.includes('"') || s.includes(',') || s.includes('\n')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
+  const lines: string[] = [headers.join(',')];
+
+  for (const r of rows) {
+    const details =
+      r.breakdown.length > 0
+        ? r.breakdown
+            .map((b) => {
+              const lessonStr = b.lessons
+                .map(
+                  (l) =>
+                    `ደርስ ${l.lessonNumber}: ${l.score}/${l.total} (${l.percent}%)`
+                )
+                .join(' · ');
+              return `${b.courseName} [${lessonStr}]`;
+            })
+            .join(' || ')
+        : 'ምንም ፈተና አልተወሰደም';
+
+    lines.push(
+      [
+        r.fullName,
+        r.phone,
+        r.email,
+        r.registeredAt ?? '',
+        `${r.passedCount}/${r.totalCourses}`,
+        r.progressPercent,
+        r.averageScore,
+        r.attemptsCount,
+        details,
+      ]
+        .map(escape)
+        .join(',')
+    );
+  }
+
+  const csv = '\uFEFF' + lines.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `basira-students-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ---------------------------------------------------------------------------
-// Main Dashboard Component
+// Page Component
 // ---------------------------------------------------------------------------
-export default function DashboardPage() {
+export default function AdminStudentsPage() {
   const router = useRouter();
 
-  const [user, setUser] = useState<DashboardUser | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-  const [hijriDate, setHijriDate] = useState('');
-
-  // Mobile hamburger menu open/close state
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
   // -------------------------------------------------------------------------
-  // DYNAMIC COURSE CATALOGUE
+  // RBAC state
   //
-  // Starts with the hardcoded fallback so the UI never renders empty.
-  // A background fetch replaces it with the live list from the database.
-  // -------------------------------------------------------------------------
-  const [courseCatalogue, setCourseCatalogue] =
-    useState<CourseMeta[]>(REQUIRED_COURSES);
-
-  // Progress + payment state
-  const [courseProgress, setCourseProgress] = useState<CourseProgress[]>([]);
-  const [progressLoading, setProgressLoading] = useState(true);
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('none');
-  const [paymentLoading, setPaymentLoading] = useState(true);
-
-  // Certificate download state
-  const [certLoading, setCertLoading] = useState(false);
-  const [certError, setCertError] = useState<string | null>(null);
-  const [certSuccess, setCertSuccess] = useState<string | null>(null);
-
-  // -------------------------------------------------------------------------
-  // Dark mode state & persistence (globally synced)
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    const stored = localStorage.getItem('basira-theme');
-    let isDark = false;
-    if (stored === 'dark') {
-      isDark = true;
-    } else if (stored === 'light') {
-      isDark = false;
-    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      isDark = true;
-    }
-
-    setDarkMode(isDark);
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, []);
-
-  const toggleDarkMode = useCallback(() => {
-    setDarkMode((prev) => {
-      const next = !prev;
-      localStorage.setItem('basira-theme', next ? 'dark' : 'light');
-      if (next) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-      return next;
-    });
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // AUTH VERIFICATION — authoritative `getUser()` against Supabase Auth.
+  //   authLoading  → true while we're still verifying auth + role.
+  //   userRole     → set to the confirmed profile role (or null).
+  //   authError    → set when the profile lookup itself fails (rare).
   //
-  // Why `getUser()` and NOT the `INITIAL_SESSION` event:
-  //   With `@supabase/ssr`'s `createBrowserClient`, the session lives in
-  //   cookies. The `INITIAL_SESSION` event can fire before the browser
-  //   client finishes reading those cookies, momentarily emitting `null`
-  //   and causing a false bounce to /login. `getUser()` reads the cookies
-  //   directly and validates the JWT with Supabase Auth — no timing race.
+  // The main content is rendered ONLY when `userRole === 'admin'`.
+  // -------------------------------------------------------------------------
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const [students, setStudents] = useState<StudentRow[]>([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<FilterKey>('all');
+  const [selected, setSelected] = useState<StudentRow | null>(null);
+
+  // -------------------------------------------------------------------------
+  // 1. STRICT RBAC — AUTH + ADMIN GUARD
   //
-  // `onAuthStateChange` is kept ONLY as a sign-out listener (multi-tab
-  // cleanup). It never determines the initial auth state.
+  //   Flow:
+  //     a) supabase.auth.getUser() — authoritative session check.
+  //        → no user → router.replace('/login')  (never clears authLoading,
+  //          so the spinner stays up until the redirect completes).
+  //     b) SELECT role FROM profiles WHERE id = user.id
+  //        → query failure → authError is set + authLoading cleared.
+  //        → role !== 'admin' → router.replace('/dashboard')
+  //          (authLoading stays true so nothing flashes before navigation).
+  //        → role === 'admin' → set userRole, clear authLoading.
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    let resolved = false;
-    let safetyTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    const finalize = (hasSession: boolean, sessionUser?: any) => {
-      if (resolved || cancelled) return;
-      resolved = true;
-
-      if (safetyTimeout) {
-        clearTimeout(safetyTimeout);
-        safetyTimeout = null;
-      }
-
-      if (hasSession && sessionUser) {
-        setUser({
-          id: sessionUser.id,
-          email: sessionUser.email,
-          full_name: sessionUser.user_metadata?.full_name,
-        });
-        setLoading(false);
-      } else {
-        router.replace('/login');
-      }
-    };
-
-    const checkUser = async () => {
+    const verifyAdmin = async () => {
       try {
+        // ---------- (a) SESSION CHECK ----------
         const {
           data: { user },
-          error,
+          error: userErr,
         } = await supabase.auth.getUser();
 
         if (cancelled) return;
 
-        if (error || !user) {
-          finalize(false);
+        if (userErr || !user) {
+          console.error('DEBUG_SUPABASE_ERROR:', userErr);
+          // Do NOT clear authLoading — the spinner stays up until the
+          // router.replace('/login') navigation completes, guaranteeing
+          // no protected content ever flashes.
+          router.replace('/login');
           return;
         }
 
-        finalize(true, user);
+        // ---------- (b) ROLE LOOKUP ----------
+        const { data: profile, error: profileErr } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        if (profileErr) {
+          console.error('DEBUG_SUPABASE_ERROR:', profileErr);
+          setAuthError(`Role Lookup Error: ${describeError(profileErr)}`);
+          setAuthLoading(false);
+          return;
+        }
+
+        const role =
+          profile && typeof profile.role === 'string'
+            ? profile.role
+            : null;
+
+        if (role !== 'admin') {
+          // Non-admin (student / null role) → bounce to dashboard.
+          // Keep authLoading true so the spinner remains until the
+          // redirect completes and no protected data flashes.
+          router.replace('/dashboard');
+          return;
+        }
+
+        // ---------- (c) ADMIN CONFIRMED ----------
+        setUserRole('admin');
+        setAuthLoading(false);
       } catch (err) {
         if (!cancelled) {
-          console.error('[Dashboard] getUser failed:', err);
-          finalize(false);
+          console.error('DEBUG_SUPABASE_ERROR:', err);
+          setAuthError(`Auth Exception: ${describeError(err)}`);
+          setAuthLoading(false);
         }
       }
     };
 
-    checkUser();
-
-    // Safety net — if nothing resolves within 5 seconds, bail out.
-    safetyTimeout = setTimeout(() => {
-      if (!cancelled && !resolved) {
-        resolved = true;
-        router.replace('/login');
-      }
-    }, 5000);
-
-    // Sign-out listener only.
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (cancelled) return;
-      if (event === 'SIGNED_OUT') {
-        router.replace('/login');
-      }
-    });
-
+    verifyAdmin();
     return () => {
       cancelled = true;
-      if (safetyTimeout) clearTimeout(safetyTimeout);
-      subscription.unsubscribe();
     };
   }, [router]);
 
-  // ---------- Hijri date ----------
-  useEffect(() => {
-    setHijriDate(getHijriDate());
-  }, []);
-
   // -------------------------------------------------------------------------
-  // FETCH DYNAMIC COURSE CATALOGUE
+  // 2. SAFE DATA LOAD
   //
-  // We attempt to read the live list of courses from the database so the
-  // dashboard always reflects the current catalogue. If the table is
-  // missing, empty, or the query fails for any reason, we silently keep
-  // the hardcoded fallback — the UI stays fully functional.
+  // Gated on userRole === 'admin' so the fetch never runs for non-admins.
   // -------------------------------------------------------------------------
-  useEffect(() => {
-    let cancelled = false;
+  const loadData = useCallback(async () => {
+    setDataLoading(true);
+    setErrorMessage(null);
 
-    const fetchCatalogue = async () => {
-      try {
-        // Primary: `courses` table with `slug` + `display_name`.
-        const { data, error } = await supabase
-          .from('courses')
-          .select('slug, display_name, order_index')
-          .order('order_index', { ascending: true });
-
-        if (cancelled) return;
-
-        if (error) {
-          // Fallback attempt: `books` table with `slug` + `title`.
-          const fallback = await supabase
-            .from('books')
-            .select('slug, title');
-
-          if (cancelled) return;
-
-          if (fallback.error || !fallback.data || fallback.data.length === 0) {
-            console.warn(
-              '[Dashboard] courses/books fetch failed — using fallback catalogue.',
-              error.message,
-              fallback.error?.message
-            );
-            return;
-          }
-
-          const mapped = (fallback.data as Array<Record<string, any>>)
-            .map((row) => ({
-              slug: String(row.slug ?? ''),
-              displayName: String(row.title ?? row.slug ?? ''),
-            }))
-            .filter((c) => c.slug !== '');
-
-          if (mapped.length > 0) {
-            setCourseCatalogue(mapped);
-          }
-          return;
-        }
-
-        if (!data || data.length === 0) {
-          console.warn(
-            '[Dashboard] courses table returned no rows — using fallback catalogue.'
-          );
-          return;
-        }
-
-        const mapped = (data as Array<Record<string, any>>)
-          .map((row) => ({
-            slug: String(row.slug ?? ''),
-            displayName: String(row.display_name ?? row.slug ?? ''),
-          }))
-          .filter((c) => c.slug !== '');
-
-        if (mapped.length > 0) {
-          setCourseCatalogue(mapped);
-        }
-      } catch (err) {
-        console.warn(
-          '[Dashboard] catalogue fetch unexpected error — using fallback:',
-          readErrorMessage(err)
-        );
-      }
-    };
-
-    fetchCatalogue();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // FETCH COURSE PROGRESS
-  //
-  // Depends on both `user.id` and the current `courseCatalogue`. If the
-  // catalogue is later replaced with the live list, progress recomputes
-  // against the new slug set.
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    if (!user?.id) return;
-    let cancelled = false;
-
-    const fetchProgress = async () => {
-      setProgressLoading(true);
-      try {
-        const slugs = courseCatalogue.map((c) => c.slug);
-
-        const { data, error } = await supabase
-          .from('quiz_results')
-          .select('course_id, score, total_questions')
-          .eq('user_id', user.id)
-          .in('course_id', slugs);
-
-        if (cancelled) return;
-
-        if (error) {
-          console.error(
-            '[Dashboard] progress query error:',
-            error.message || error
-          );
-          setCourseProgress(buildCourseProgress([], courseCatalogue));
-          return;
-        }
-
-        setCourseProgress(
-          buildCourseProgress((data ?? []) as any[], courseCatalogue)
-        );
-      } catch (err) {
-        if (!cancelled) {
-          console.error(
-            '[Dashboard] progress unexpected error:',
-            readErrorMessage(err)
-          );
-          setCourseProgress(buildCourseProgress([], courseCatalogue));
-        }
-      } finally {
-        if (!cancelled) setProgressLoading(false);
-      }
-    };
-
-    fetchProgress();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id, courseCatalogue]);
-
-  // ---------- Fetch payment status ----------
-  useEffect(() => {
-    if (!user?.id) return;
-    let cancelled = false;
-
-    const fetchPayment = async () => {
-      setPaymentLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('payments')
-          .select('status, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (cancelled) return;
-
-        if (error) {
-          console.error(
-            '[Dashboard] payment query error:',
-            error.message || error
-          );
-
-          const retry = await supabase
-            .from('payments')
-            .select('status')
-            .eq('user_id', user.id)
-            .limit(1);
-
-          if (retry.error || !retry.data || retry.data.length === 0) {
-            setPaymentStatus('none');
-            return;
-          }
-
-          const s = String(retry.data[0]?.status ?? '').toLowerCase();
-          if (s === 'approved') setPaymentStatus('approved');
-          else if (s === 'rejected') setPaymentStatus('rejected');
-          else setPaymentStatus('pending');
-          return;
-        }
-
-        if (!data || data.length === 0) {
-          setPaymentStatus('none');
-          return;
-        }
-
-        const s = String(data[0]?.status ?? '').toLowerCase();
-        if (s === 'approved') setPaymentStatus('approved');
-        else if (s === 'rejected') setPaymentStatus('rejected');
-        else setPaymentStatus('pending');
-      } catch (err) {
-        if (!cancelled) {
-          console.error(
-            '[Dashboard] payment unexpected error:',
-            readErrorMessage(err)
-          );
-          setPaymentStatus('none');
-        }
-      } finally {
-        if (!cancelled) setPaymentLoading(false);
-      }
-    };
-
-    fetchPayment();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
-
-  // -------------------------------------------------------------------------
-  // LOGOUT — clears the Supabase session and hard-redirects to /login.
-  // -------------------------------------------------------------------------
-  const handleLogout = async () => {
-    setLoggingOut(true);
+    // ---- A) PROFILES (required) ----
+    let profiles: ProfileRow[] = [];
     try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
-    window.location.href = '/login';
-  };
+      const { data, error } = await supabase.from('profiles').select('*');
 
-  // -------------------------------------------------------------------------
-  // Certificate download handler
-  // -------------------------------------------------------------------------
-  const handleDownloadCertificate = useCallback(async () => {
-    if (!user?.id) {
-      setCertError('የተጠቃሚ መረጃ አልተገኘም። እባክዎ እንደገና ይግቡ።');
-      setCertSuccess(null);
+      if (error) {
+        console.error('DEBUG_SUPABASE_ERROR:', error);
+        setErrorMessage(
+          `Profiles Error: ${error.message} (Code: ${error.code ?? 'N/A'})`
+        );
+        setDataLoading(false);
+        return;
+      }
+
+      profiles = ((data ?? []) as Array<Record<string, any>>).map((p) => {
+        const timestamp =
+          (p.created_at as string | null | undefined) ??
+          (p.inserted_at as string | null | undefined) ??
+          (p.registered_at as string | null | undefined) ??
+          (p.updated_at as string | null | undefined) ??
+          null;
+
+        return {
+          id: String(p.id ?? ''),
+          full_name: (p.full_name as string | null) ?? null,
+          phone: (p.phone as string | null) ?? null,
+          email: (p.email as string | null) ?? null,
+          role: (p.role as string | null) ?? null,
+          created_at: timestamp,
+        };
+      });
+
+      profiles.sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
+    } catch (err) {
+      console.error('DEBUG_SUPABASE_ERROR:', err);
+      setErrorMessage(`Profiles Exception: ${describeError(err)}`);
+      setDataLoading(false);
       return;
     }
 
-    setCertLoading(true);
-    setCertError(null);
-    setCertSuccess(null);
-
+    // ---- B) QUIZ RESULTS (optional, SILENT on failure) ----
+    let quizRows: QuizRow[] = [];
     try {
-      const response = await fetch('/api/generate-certificate', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id }),
+      const { data, error } = await supabase
+        .from('quiz_results')
+        .select('user_id, course_id, score, total_questions, created_at');
+
+      if (error) {
+        console.warn(
+          '[AdminStudents] Primary quiz_results select failed, retrying minimal columns:',
+          error.message
+        );
+
+        const fallback = await supabase
+          .from('quiz_results')
+          .select('user_id, course_id, score, total_questions');
+
+        if (fallback.error) {
+          console.error(
+            'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
+            fallback.error
+          );
+          quizRows = [];
+        } else {
+          quizRows = ((fallback.data ?? []) as Array<Record<string, any>>).map(
+            (q) => ({
+              user_id: String(q.user_id ?? ''),
+              course_id: String(q.course_id ?? ''),
+              score: (q.score as number | null) ?? null,
+              total_questions: (q.total_questions as number | null) ?? null,
+              created_at: null,
+            })
+          );
+        }
+      } else {
+        quizRows = ((data ?? []) as Array<Record<string, any>>).map((q) => ({
+          user_id: String(q.user_id ?? ''),
+          course_id: String(q.course_id ?? ''),
+          score: (q.score as number | null) ?? null,
+          total_questions: (q.total_questions as number | null) ?? null,
+          created_at: (q.created_at as string | null) ?? null,
+        }));
+      }
+    } catch (err) {
+      console.error(
+        'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
+        err
+      );
+      quizRows = [];
+    }
+
+    // ---- Index quiz rows by user ----
+    const quizzesByUser = new Map<string, QuizRow[]>();
+    for (const q of quizRows) {
+      if (!q.user_id) continue;
+      const arr = quizzesByUser.get(q.user_id) ?? [];
+      arr.push(q);
+      quizzesByUser.set(q.user_id, arr);
+    }
+
+    // ---- Compose student rows ----
+    const rows: StudentRow[] = profiles
+      .filter((p) => p.role !== 'admin' && p.id)
+      .map((p) => {
+        const userQuizzes = quizzesByUser.get(p.id) ?? [];
+        const breakdown = buildBreakdown(userQuizzes);
+
+        const passedCount = breakdown.filter((b) => b.passed).length;
+        const totalCourses = REQUIRED_COURSES.length;
+
+        const progressPercent = Math.round(
+          (REQUIRED_COURSES.reduce((acc, c) => {
+            const b = breakdown.find((x) => x.courseId === c.slug);
+            const best = b ? b.bestPercent : 0;
+            return acc + Math.min(best, PASS_THRESHOLD_PERCENT);
+          }, 0) /
+            (totalCourses * PASS_THRESHOLD_PERCENT)) *
+            100
+        );
+
+        const percents = userQuizzes.map((q) =>
+          computePercent(q.score, q.total_questions)
+        );
+        const averageScore =
+          percents.length > 0
+            ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
+            : 0;
+
+        const current = breakdown[0] ?? null;
+        const currentCourseName = current?.courseName ?? null;
+        const currentLessonNumber = current
+          ? current.lessons[current.lessons.length - 1]?.lessonNumber ?? null
+          : null;
+
+        return {
+          id: p.id,
+          fullName: p.full_name ?? 'ያልተጠቀሰ',
+          phone: p.phone ?? '',
+          email: p.email ?? '',
+          registeredAt: p.created_at,
+          role: p.role ?? 'student',
+          totalCourses,
+          passedCount,
+          progressPercent,
+          averageScore,
+          attemptsCount: userQuizzes.length,
+          currentCourseName,
+          currentLessonNumber,
+          breakdown,
+        };
       });
 
-      let payload: any = null;
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
-      }
+    setStudents(rows);
+    setDataLoading(false);
+  }, []);
 
-      if (response.status === 401) {
-        setCertError(
-          payload?.error ||
-            'እባክዎ መጀመሪያ ይግቡ — የእርስዎ ክፍለ ጊዜ አልተገኘም።'
-        );
-        return;
-      }
-
-      if (response.status === 400) {
-        setCertError(
-          payload?.error || 'የተጠቃሚ መለያ (userId) አልተላከም።'
-        );
-        return;
-      }
-
-      if (!response.ok || payload?.eligible === false || payload?.error) {
-        setCertError(
-          payload?.error ||
-            payload?.message ||
-            'ሰርቲፊኬቱን ማዘጋጀት አልተቻለም። እባክዎ እንደገና ይሞክሩ።'
-        );
-        return;
-      }
-
-      const certificateUrl: string = payload?.certificateUrl ?? '';
-      if (!certificateUrl) {
-        setCertError('የሰርቲፊኬቱን አድራሻ ማግኘት አልተቻለም።');
-        return;
-      }
-
-      const filename = buildCertificateFilename(
-        user.full_name || user.email || 'Student'
-      );
-
-      const fileRes = await fetch(certificateUrl);
-      if (!fileRes.ok) {
-        throw new Error(
-          `ሰርቲፊኬቱን ማውረድ አልተቻለም (HTTP ${fileRes.status}).`
-        );
-      }
-
-      const blob = await fileRes.blob();
-      const objectUrl = window.URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = filename;
-      link.rel = 'noopener';
-      link.style.display = 'none';
-
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      window.setTimeout(() => {
-        window.URL.revokeObjectURL(objectUrl);
-      }, 0);
-
-      setCertSuccess(
-        `ሰርቲፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል እና በ${filename} ስም ተቀምጧል።`
-      );
-    } catch (err) {
-      const reason =
-        err instanceof Error ? err.message : 'ያልታወቀ ስህተት ተከስቷል።';
-      setCertError(reason);
-    } finally {
-      setCertLoading(false);
+  useEffect(() => {
+    if (userRole === 'admin' && !authError) {
+      loadData();
     }
-  }, [user?.id, user?.full_name, user?.email]);
+  }, [userRole, authError, loadData]);
 
   // -------------------------------------------------------------------------
-  // Derived state
+  // 3. FILTER + SEARCH
   // -------------------------------------------------------------------------
-  const isPaymentApproved = paymentStatus === 'approved';
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
 
-  // Total number of courses comes from the live catalogue (falls back to 4).
-  const totalCoursesCount = courseCatalogue.length;
+    return students.filter((s) => {
+      if (filter === 'completed' && s.passedCount < 1) return false;
+      if (
+        filter === 'in_progress' &&
+        !(s.attemptsCount > 0 && s.passedCount === 0)
+      )
+        return false;
 
-  const passedCount = courseProgress.filter(
-    (c) => c.status === 'passed'
-  ).length;
+      if (!q) return true;
+      return (
+        s.fullName.toLowerCase().includes(q) ||
+        s.phone.toLowerCase().includes(q) ||
+        s.email.toLowerCase().includes(q)
+      );
+    });
+  }, [students, search, filter]);
 
   // -------------------------------------------------------------------------
-  // Overall progress = plain average of every course's aggregated percentage.
+  // 4. STATS
   // -------------------------------------------------------------------------
-  const overallProgressPct =
-    totalCoursesCount > 0
-      ? Math.round(
-          courseProgress.reduce((acc, c) => acc + c.bestPercent, 0) /
-            totalCoursesCount
-        )
-      : 0;
+  const stats = useMemo(() => {
+    const totalStudents = students.length;
+    const completedCount = students.filter((s) => s.passedCount >= 1).length;
+
+    const allPercents: number[] = [];
+    let totalAttempts = 0;
+
+    for (const s of students) {
+      totalAttempts += s.attemptsCount;
+      for (const b of s.breakdown) {
+        for (const l of b.lessons) {
+          allPercents.push(l.percent);
+        }
+      }
+    }
+
+    const overallAvg =
+      allPercents.length > 0
+        ? Math.round(
+            allPercents.reduce((a, b) => a + b, 0) / allPercents.length
+          )
+        : 0;
+
+    return { totalStudents, completedCount, overallAvg, totalAttempts };
+  }, [students]);
 
   // -------------------------------------------------------------------------
-  // Loading state — shown while auth is being verified or user is unknown.
+  // 5. HANDLERS
   // -------------------------------------------------------------------------
-  if (loading) {
+  const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) =>
+    setSearch(e.target.value);
+
+  const handleExport = () => {
+    if (filtered.length === 0) return;
+    downloadCSV(filtered);
+  };
+
+  const closeModal = useCallback(() => setSelected(null), []);
+
+  const dismissError = useCallback(() => setErrorMessage(null), []);
+
+  // -------------------------------------------------------------------------
+  // 6. RBAC GATES — LOADING SPINNER / ERROR
+  //
+  // CRITICAL: The full admin UI (header, stats, table, modal) is rendered
+  // ONLY after `userRole === 'admin'` is explicitly confirmed. Until then,
+  // a full-screen loading state is shown so no protected content flashes.
+  // -------------------------------------------------------------------------
+
+  // (a) Verify-in-progress — spinner stays up until admin is confirmed
+  //     OR until a redirect (login/dashboard) completes.
+  if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-slate-900">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
+            <ShieldCheck className="h-7 w-7 text-white" />
+          </div>
+          <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            በማረጋገጥ ላይ ነው...
+          </p>
+        </div>
       </div>
     );
   }
 
-  if (!user?.id) {
+  // (b) Role-lookup error — no admin UI is ever rendered in this branch.
+  if (authError) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-slate-900">
-        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
+        <div className="max-w-md w-full rounded-2xl border border-red-200 dark:border-red-900/60 bg-white dark:bg-slate-900 p-6 shadow-sm">
+          <div className="flex items-center gap-3 mb-3">
+            <ShieldAlert className="h-6 w-6 text-red-500" />
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+              መግቢያ ተከልክሏል
+            </h2>
+          </div>
+          <p className="text-sm text-slate-600 dark:text-slate-400 mb-4 break-words">
+            {authError}
+          </p>
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-semibold text-white"
+          >
+            ወደ ዳሽቦርድ ተመለስ
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const displayName = user.full_name || user.email || 'ተማሪ';
+  // (c) Explicit admin gate — renders nothing (spinner) unless the role
+  //     has been confirmed. This is the final safety net that guarantees
+  //     the protected UI can NEVER flash for a non-admin, even during the
+  //     brief moment between state updates and the router redirect.
+  if (userRole !== 'admin') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            በማረጋገጥ ላይ ነው...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // -------------------------------------------------------------------------
-  // Render
+  // 7. MAIN RENDER — reached only when userRole === 'admin'.
   // -------------------------------------------------------------------------
   return (
-    <div
-      className={`min-h-screen transition-colors duration-300 ${
-        darkMode
-          ? 'dark bg-slate-900 text-white'
-          : 'bg-slate-50 text-slate-900'
-      }`}
-    >
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       {/* ================================================================= */}
-      {/* Sticky Header (glassmorphism)                                     */}
+      {/* Header                                                             */}
       {/* ================================================================= */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-slate-200/60 dark:border-slate-800/60 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
-              <GraduationCap className="h-6 w-6 text-white" />
+      <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/85 dark:bg-slate-900/85 border-b border-slate-200/70 dark:border-slate-800/70">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20 flex-shrink-0">
+              <BarChart3 className="h-6 w-6 text-white" />
             </div>
-            <div>
-              <h1 className="text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 to-emerald-800 dark:from-emerald-300 dark:to-emerald-500 bg-clip-text text-transparent">
-                ባሲራ
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg font-extrabold tracking-tight truncate">
+                የተማሪዎች ዝርዝር እና ውጤት
               </h1>
-              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 -mt-0.5">
-                Basira Dashboard
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+                Basira · Admin Panel
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Mobile hamburger button */}
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setMobileMenuOpen((prev) => !prev)}
-              className="md:hidden relative p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
-              aria-expanded={mobileMenuOpen}
+              type="button"
+              onClick={loadData}
+              disabled={dataLoading}
+              className="hidden sm:inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-60"
             >
-              {mobileMenuOpen ? (
-                <X className="h-5 w-5" />
-              ) : (
-                <Menu className="h-5 w-5" />
-              )}
-            </button>
-
-            <button
-              onClick={toggleDarkMode}
-              className="relative p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              aria-label="Toggle dark mode"
-            >
-              {darkMode ? (
-                <Sun className="h-5 w-5" />
-              ) : (
-                <Moon className="h-5 w-5" />
-              )}
-            </button>
-
-            <div className="hidden sm:flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 pl-1 pr-3 py-1 rounded-full border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/60">
-              <User className="h-4 w-4 text-slate-400 dark:text-slate-500" />
-              <span className="font-medium max-w-[140px] truncate">
-                {displayName}
-              </span>
-            </div>
-
-            <button
-              onClick={handleLogout}
-              disabled={loggingOut}
-              className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 px-3 sm:px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-200 dark:hover:border-red-800 transition-colors duration-200 disabled:opacity-60"
-            >
-              {loggingOut ? (
+              {dataLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <LogOut className="h-4 w-4" />
+                <RefreshCw className="h-4 w-4" />
               )}
-              <span className="hidden sm:inline">ውጣ</span>
+              አድስ
             </button>
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
+              ዳሽቦርድ
+            </Link>
           </div>
         </div>
-
-        {/* Mobile dropdown navigation panel */}
-        {mobileMenuOpen && (
-          <div className="md:hidden border-t border-slate-200/60 dark:border-slate-800/60 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl">
-            <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-1">
-              <Link
-                href="/dashboard/payment"
-                onClick={() => setMobileMenuOpen(false)}
-                className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/60">
-                  <CreditCard className="h-4 w-4 text-emerald-700 dark:text-emerald-300" />
-                </span>
-                <span>የክፍያ ሁኔታ</span>
-              </Link>
-
-              {/* NEW — Certificate download moved into the mobile drawer */}
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  handleDownloadCertificate();
-                }}
-                disabled={certLoading}
-                className="w-full flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700 dark:hover:text-amber-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed text-left"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/60">
-                  {certLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-amber-700 dark:text-amber-300" />
-                  ) : (
-                    <GraduationCap className="h-4 w-4 text-amber-700 dark:text-amber-300" />
-                  )}
-                </span>
-                <span>{certLoading ? 'በመዘጋጀት ላይ...' : 'የኔ ሰርቲፊኬት'}</span>
-              </button>
-            </nav>
-          </div>
-        )}
       </header>
 
       {/* ================================================================= */}
-      {/* Main Content                                                       */}
+      {/* Main                                                               */}
       {/* ================================================================= */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-5 sm:mt-6 pb-12">
-        {/* ============================================================ */}
-        {/* DYNAMIC PAYMENT STATUS BANNER                                 */}
-        {/* ============================================================ */}
-        {!paymentLoading && paymentStatus === 'none' && (
-          <div className="mb-5 sm:mb-6 rounded-2xl border border-amber-300 dark:border-amber-800 bg-gradient-to-r from-amber-50 to-amber-100/60 dark:from-amber-950/40 dark:to-amber-900/20 p-4 sm:p-5 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-              <div className="flex items-start gap-3 flex-1 min-w-0">
-                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/60">
-                  <AlertTriangle className="h-5 w-5 text-amber-700 dark:text-amber-300" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm sm:text-base font-bold text-amber-900 dark:text-amber-100">
-                    ትምህርቶችን ሙሉ በሙሉ ለመክፈት ክፍያ ይፈጽሙ
-                  </p>
-                  <p className="mt-0.5 text-xs sm:text-sm text-amber-800/90 dark:text-amber-200/80 leading-relaxed">
-                    ክፍያዎን አጠናቀው ሁሉንም ትምህርቶች፣ ዲጂታል ቤተ-መጽሐፍት እና
-                    ሰርቲፊኬት ይክፈቱ።
-                  </p>
-                </div>
-              </div>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        {/* ---------- Stats ---------- */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          <StatCard
+            label="ጠቅላላ ተማሪዎች"
+            value={String(stats.totalStudents)}
+            accent="emerald"
+            icon={<Users className="h-5 w-5" />}
+          />
+          <StatCard
+            label="የጨረሱ ተማሪዎች"
+            value={String(stats.completedCount)}
+            accent="sky"
+            icon={<GraduationCap className="h-5 w-5" />}
+          />
+          <StatCard
+            label="አማካይ የፈተና ውጤት"
+            value={`${stats.overallAvg}%`}
+            accent="purple"
+            icon={<TrendingUp className="h-5 w-5" />}
+          />
+          <StatCard
+            label="ጠቅላላ ፈተናዎች"
+            value={String(stats.totalAttempts)}
+            accent="amber"
+            icon={<Award className="h-5 w-5" />}
+          />
+        </div>
 
-              <Link
-                href="/dashboard/payment"
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 px-4 py-2.5 text-sm font-bold text-white shadow-md shadow-amber-900/20 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 flex-shrink-0"
+        {/* ---------- Toolbar ---------- */}
+        <div className="mb-5 flex flex-col lg:flex-row lg:items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={handleSearchChange}
+              placeholder="በስም፣ በስልክ ቁጥር ወይም በኢሜይል ይፈልጉ..."
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition-all"
+            />
+          </div>
+
+          <div className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-1">
+            {(
+              [
+                { key: 'all', label: 'ሁሉም' },
+                { key: 'in_progress', label: 'በጥናት ላይ' },
+                { key: 'completed', label: 'ትምህርት የጨረሱ' },
+              ] as { key: FilterKey; label: string }[]
+            ).map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setFilter(f.key)}
+                className={`px-3.5 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-colors ${
+                  filter === f.key
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
               >
-                አሁኑኑ ይክፈሉ
-              </Link>
-            </div>
+                {f.label}
+              </button>
+            ))}
           </div>
-        )}
 
-        {!paymentLoading && paymentStatus === 'pending' && (
-          <div className="mb-5 sm:mb-6 rounded-2xl border border-sky-300 dark:border-sky-800 bg-gradient-to-r from-sky-50 to-sky-100/60 dark:from-sky-950/40 dark:to-sky-900/20 p-4 sm:p-5 shadow-sm">
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-sky-100 dark:bg-sky-900/60">
-                <Clock className="h-5 w-5 text-sky-700 dark:text-sky-300" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm sm:text-base font-bold text-sky-900 dark:text-sky-100">
-                  ⏳ የላኩት ደረሰኝ በመመርመር ላይ ነው!
-                </p>
-                <p className="mt-0.5 text-xs sm:text-sm text-sky-800/90 dark:text-sky-200/80 leading-relaxed">
-                  አድሚኑ እንደሚያረጋግጥልዎ ሙሉ ትምህርቶቹ ይከፈታሉ። እባክዎ በትዕግስት
-                  ይጠብቁ።
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+          {/* CSV export — sleek secondary outline button */}
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={filtered.length === 0}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-600 dark:border-emerald-500 bg-transparent px-4 py-2.5 text-sm font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download className="h-4 w-4" />
+            CSV አውርድ
+          </button>
+        </div>
 
-        {/* ============================================================ */}
-        {/* CERTIFICATE DOWNLOAD ERROR / SUCCESS TOASTS                  */}
-        {/*                                                              */}
-        {/* The big certificate card has been moved into the mobile      */}
-        {/* hamburger drawer. Only the small inline toasts remain here  */}
-        {/* so the student gets feedback when they tap the menu item.   */}
-        {/* ============================================================ */}
-        {certError && !certLoading && (
+        {/* ---------- ERROR BANNER ---------- */}
+        {errorMessage && (
           <div
             role="alert"
-            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
+            className="mb-5 flex items-start gap-3 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300"
           >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
-            <div className="flex-1">
-              <p className="font-semibold">
-                ሰርቲፊኬቱን ማዘጋጀት አልተቻለም
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="font-bold mb-0.5">Supabase Error</p>
+              <p className="break-words font-mono text-[12px] leading-relaxed whitespace-pre-wrap">
+                {errorMessage}
               </p>
-              <p className="mt-0.5 whitespace-pre-line leading-relaxed">
-                {certError}
-              </p>
-              <button
-                type="button"
-                onClick={() => setCertError(null)}
-                className="mt-2 text-xs font-semibold underline hover:no-underline"
-              >
-                ዝጋ
-              </button>
             </div>
+            <button
+              type="button"
+              onClick={dismissError}
+              aria-label="Dismiss error"
+              className="flex-shrink-0 rounded-lg p-1 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
 
-        {certSuccess && !certLoading && !certError && (
-          <div
-            role="status"
-            className="mb-5 sm:mb-6 flex items-start gap-3 rounded-xl border border-emerald-300 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300"
-          >
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
-            <div className="flex-1">
-              <p className="font-semibold">
-                ሰርቲፊኬቱ በተሳካ ሁኔታ ተዘጋጅቷል!
+        {/* ---------- Table ---------- */}
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+          {dataLoading ? (
+            <TableSkeleton />
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <Users className="h-10 w-10 text-slate-300 dark:text-slate-600" />
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                ምንም ተማሪ አልተገኘም።
               </p>
-              <p className="mt-0.5 leading-relaxed">{certSuccess}</p>
-              <button
-                type="button"
-                onClick={() => setCertSuccess(null)}
-                className="mt-2 text-xs font-semibold underline hover:no-underline"
-              >
-                ዝጋ
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ============================================================ */}
-        {/* PRIMARY CARD 1 — COMPACT HERO / WELCOME BANNER               */}
-        {/* ============================================================ */}
-        <div className="relative rounded-2xl overflow-hidden shadow-lg shadow-emerald-950/10 ring-1 ring-emerald-100/60 dark:ring-emerald-900/40">
-          <div className="absolute inset-0">
-            <img
-              src={HERO_IMAGE_URL}
-              alt=""
-              aria-hidden="true"
-              className="h-full w-full object-cover scale-105"
-            />
-            <div className="absolute inset-0 bg-gradient-to-tr from-emerald-950/85 via-emerald-900/70 to-slate-950/80" />
-            <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-amber-400/20 blur-3xl" />
-            <div className="absolute -bottom-20 -left-20 h-40 w-40 rounded-full bg-emerald-400/20 blur-3xl" />
-          </div>
-
-          <div className="relative px-5 sm:px-7 py-6 sm:py-7 flex flex-col gap-3">
-            <div className="self-start inline-flex items-center gap-2 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 px-3 py-1.5">
-              <Calendar className="h-4 w-4 text-amber-300" />
-              <span className="text-xs font-medium text-white/95 tracking-wide">
-                ዛሬ፡ {hijriDate}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight drop-shadow-sm">
-                እንኳን ደህና መጡ፣ {displayName}!
-              </h2>
-              <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-amber-300" />
-            </div>
-          </div>
-        </div>
-
-        {/* ============================================================ */}
-        {/* PRIMARY CARD 2 — COURSE PROGRESS                             */}
-        {/* ============================================================ */}
-        <div
-          className={[
-            'mt-6 relative bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6 overflow-hidden',
-            !isPaymentApproved ? 'opacity-70' : '',
-          ].join(' ')}
-        >
-          {!paymentLoading && !isPaymentApproved && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/40 dark:bg-slate-900/40 backdrop-blur-[2px]">
-              <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-4 py-2 shadow-lg border border-slate-200 dark:border-slate-700">
-                <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  ክፍያ እስኪጸድቅ ድረስ ተቆልፏል
-                </span>
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between gap-4 mb-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-md shadow-emerald-900/20">
-                <Award className="h-6 w-6 text-white" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-800 dark:text-white">
-                  የትምህርት ሂደት
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {passedCount} / {totalCoursesCount} ኪታቦች ተጠናቅቀዋል
-                </p>
-              </div>
-            </div>
-            <div className="hidden sm:flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                {overallProgressPct}%
-              </span>
-              <div className="h-2 w-32 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
-                  style={{ width: `${overallProgressPct}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {progressLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-emerald-600 dark:text-emerald-400" />
-              <span className="ml-3 text-sm text-slate-600 dark:text-slate-400">
-                ሂደትዎን በመጫን ላይ ነው...
-              </span>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3 md:gap-4">
-              {courseProgress.map((c) => {
-                const isPassed = c.status === 'passed';
-                const isInProgress = c.status === 'in_progress';
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1000px]">
+                <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
+                  <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    {/* Sticky first header column */}
+                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800/60 px-5 py-3 font-semibold shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
+                      ተማሪ
+                    </th>
+                    <th className="px-5 py-3 font-semibold">ስልክ / ኢሜይል</th>
+                    <th className="px-5 py-3 font-semibold">
+                      የአሁን ኪታብ እና ደርስ
+                    </th>
+                    <th className="px-5 py-3 font-semibold">አማካይ ነጥብ</th>
+                    <th className="px-5 py-3 font-semibold">የጨረሷቸው</th>
+                    <th className="px-5 py-3 font-semibold text-right">
+                      ዝርዝር
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((s) => (
+                    <tr
+                      key={s.id}
+                      onClick={() => setSelected(s)}
+                      className="group border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
+                    >
+                      {/* Student — sticky first column */}
+                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800 px-5 py-4 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
+                            {s.fullName.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate max-w-[180px]">
+                              {s.fullName}
+                            </p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {formatDateAmh(s.registeredAt)}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
 
-                const barWidth = Math.max(0, Math.min(100, c.bestPercent));
+                      {/* Phone / Email */}
+                      <td className="px-5 py-4">
+                        <div className="flex flex-col gap-1">
+                          {s.phone ? (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-700 dark:text-slate-300">
+                              <Phone className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                              {s.phone}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 italic">
+                              ስልክ አልተመዘገበም
+                            </span>
+                          )}
+                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-[220px]">
+                            <Mail className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                            <span className="truncate">{s.email || '—'}</span>
+                          </span>
+                        </div>
+                      </td>
 
-                const barColor = isPassed
-                  ? 'bg-emerald-500'
-                  : isInProgress
-                  ? 'bg-amber-500'
-                  : 'bg-slate-300 dark:bg-slate-600';
-
-                return (
-                  <div
-                    key={c.slug}
-                    className={[
-                      'flex flex-col rounded-xl border px-3 py-3 sm:px-4 transition-colors',
-                      isPassed
-                        ? 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30'
-                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/40',
-                    ].join(' ')}
-                  >
-                    <div className="flex items-center gap-2 sm:gap-3">
-                      <div className="flex-shrink-0">
-                        {isPassed ? (
-                          <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
-                        ) : isInProgress ? (
-                          <Clock className="h-5 w-5 sm:h-6 sm:w-6 text-amber-500" />
+                      {/* Current kitab / lesson */}
+                      <td className="px-5 py-4">
+                        {s.currentCourseName ? (
+                          <div className="flex flex-col">
+                            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
+                              <BookOpen className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                              {s.currentCourseName}
+                            </span>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                              ደርስ {s.currentLessonNumber ?? 0}
+                            </span>
+                          </div>
                         ) : (
-                          <Circle className="h-5 w-5 sm:h-6 sm:w-6 text-slate-300 dark:text-slate-600" />
+                          <span className="text-xs text-slate-400 dark:text-slate-500">
+                            አልጀመሩም
+                          </span>
                         )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
-                          {c.displayName}
-                        </p>
-                        <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
-                          {isPassed
-                            ? `ተሳክቷል · ${c.bestPercent}%`
-                            : isInProgress
-                            ? `በሂደት · ${c.bestPercent}% / ${PASS_THRESHOLD_PERCENT}%`
-                            : 'አልተጀመረም'}
-                        </p>
-                      </div>
-                      {isPassed && (
-                        <span className="hidden sm:inline-flex flex-shrink-0 rounded-full bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5">
-                          PASS
-                        </span>
-                      )}
-                    </div>
+                      </td>
 
-                    <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-                      <div
-                        className={`h-full rounded-full transition-all duration-700 ease-out ${barColor}`}
-                        style={{ width: `${barWidth}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+                      {/* Average score */}
+                      <td className="px-5 py-4">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">
+                            {s.attemptsCount > 0 ? `${s.averageScore}%` : '—'}
+                          </span>
+                          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {s.attemptsCount > 0
+                              ? `${s.attemptsCount} ሙከራ`
+                              : 'ምንም ፈተና አልተወሰደም'}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Passed kitabs — badge color & icon logic */}
+                      <td className="px-5 py-4">
+                        {s.passedCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                            <CheckCircle className="h-3 w-3" />
+                            {s.passedCount} / {s.totalCourses}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-2.5 py-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                            0 / {s.totalCourses}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Row action */}
+                      <td className="px-5 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelected(s);
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+                        >
+                          ዝርዝር ውጤት እይ
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
 
-        {/* ============================================================ */}
-        {/* SECONDARY — 4 LEARNING PILLARS                               */}
-        {/* ============================================================ */}
-        <div className="mt-8">
-          <div className="flex items-center gap-2 mb-6">
-            <h3 className="text-xl font-bold text-slate-800 dark:text-white">
-              የመማሪያ ማዕከላት
-            </h3>
-            {!paymentLoading && !isPaymentApproved && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
-                <Lock className="h-3 w-3" />
-                ተቆልፏል
-              </span>
-            )}
+        <p className="mt-4 text-center text-xs text-slate-400 dark:text-slate-500">
+          {filtered.length} ከ {students.length} ተማሪዎች ይታያሉ
+        </p>
+      </main>
+
+      {/* ================================================================= */}
+      {/* Detail Modal                                                       */}
+      {/* ================================================================= */}
+      {selected && <StudentModal student={selected} onClose={closeModal} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Subcomponents
+// ---------------------------------------------------------------------------
+
+function StatCard({
+  label,
+  value,
+  accent,
+  icon,
+}: {
+  label: string;
+  value: string;
+  accent: 'emerald' | 'sky' | 'amber' | 'purple';
+  icon: ReactNode;
+}) {
+  const accentMap: Record<string, string> = {
+    emerald:
+      'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300',
+    sky: 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300',
+    amber: 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300',
+    purple:
+      'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300',
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm">
+      <div className="flex items-center gap-3">
+        <div
+          className={`flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0 ${accentMap[accent]}`}
+        >
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+            {label}
+          </p>
+          <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums text-slate-900 dark:text-white">
+            {value}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TableSkeleton() {
+  return (
+    <div className="p-5 space-y-3">
+      <div className="grid grid-cols-6 gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <div
+            key={i}
+            className="h-3 rounded bg-slate-100 dark:bg-slate-800 animate-pulse"
+          />
+        ))}
+      </div>
+      {[1, 2, 3, 4, 5].map((row) => (
+        <div key={row} className="grid grid-cols-6 gap-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+              <div className="h-2.5 w-16 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="h-2.5 w-32 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="h-2.5 w-16 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          </div>
+          <div className="h-3 w-12 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          <div className="h-6 w-16 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          <div className="h-3 w-20 rounded bg-slate-100 dark:bg-slate-800 animate-pulse ml-auto" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StudentModal({
+  student,
+  onClose,
+}: {
+  student: StudentRow;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  useEffect(() => {
+    const original = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = original;
+    };
+  }, []);
+
+  const cleanPhone = student.phone.replace(/\s+/g, '');
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      <div className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl">
+        {/* Header */}
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-lg font-extrabold">
+              {student.fullName.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-lg font-bold truncate">
+                {student.fullName}
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                ዝርዝር የፈተና ውጤት
+              </p>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 md:gap-4">
-            {/* 1. የላቁ ኮርሶች */}
-            <Link
-              href={isPaymentApproved ? '/courses' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
-            >
-              {!isPaymentApproved && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
-                  <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
-                    <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">
-                      ተቆልፏል
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-amber-50 dark:bg-amber-900/20 mb-3">
-                <BookOpen className="h-5 w-5 sm:h-6 sm:w-6 text-amber-600 dark:text-amber-400" />
-              </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
-                የላቁ ኮርሶች
-              </h4>
-              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                የተከፈሉና የላቁ ኮርሶች ከምሁራን ጋር።
-              </p>
-            </Link>
-
-            {/* 2. የቁርአን ማዕከል */}
-            <Link
-              href={isPaymentApproved ? '/quran' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
-            >
-              {!isPaymentApproved && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
-                  <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
-                    <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">
-                      ተቆልፏል
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-emerald-50 dark:bg-emerald-900/20 mb-3">
-                <Mic className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 dark:text-emerald-400" />
-              </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
-                የቁርአን ማዕከል
-              </h4>
-              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                የቃሪዎች ማዕከል – ተጅዊድና ንባብ ልምምድ።
-              </p>
-            </Link>
-
-            {/* 3. ዳዕዋዎችና ሙሐደራዎች */}
-            <Link
-              href={isPaymentApproved ? '/dawah' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
-            >
-              {!isPaymentApproved && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
-                  <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
-                    <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">
-                      ተቆልፏል
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-blue-50 dark:bg-blue-900/20 mb-3">
-                <GraduationCap className="h-5 w-5 sm:h-6 sm:w-6 text-blue-600 dark:text-blue-400" />
-              </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
-                ዳዕዋዎችና ሙሐደራዎች
-              </h4>
-              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                የሀገር ውስጥና ዓለም አቀፍ እስላማዊ ትምህርቶች።
-              </p>
-            </Link>
-
-            {/* 4. ዲጂታል ቤተ-መጽሐፍት */}
-            <Link
-              href={isPaymentApproved ? '/library' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
-              className={[
-                'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
-                  ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
-                  : 'opacity-60 pointer-events-none select-none',
-              ].join(' ')}
-            >
-              {!isPaymentApproved && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
-                  <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
-                    <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">
-                      ተቆልፏል
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-purple-50 dark:bg-purple-900/20 mb-3">
-                <Library className="h-5 w-5 sm:h-6 sm:w-6 text-purple-600 dark:text-purple-400" />
-              </div>
-              <h4 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors">
-                ዲጂታል ቤተ-መጽሐፍት
-              </h4>
-              <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                ፒዲኤፍ መጻሕፍትና ንባብ ማዕከል።
-              </p>
-            </Link>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex-shrink-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
-        {/* ============================================================ */}
-        {/* FOOTER — COMPACT TELEGRAM BANNER                             */}
-        {/* ============================================================ */}
-        <a
-          href="https://t.me/Basira_on"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-10 group flex items-center gap-3 rounded-xl border border-sky-200/70 dark:border-sky-900/50 bg-sky-50/70 dark:bg-sky-950/30 px-4 py-3 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
-        >
-          <div
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg shadow-sm"
-            style={{ backgroundColor: '#0088cc' }}
-          >
-            <Send className="h-4 w-4 text-white" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
-              የቴሌግራም ቻናላችንን ይቀላቀሉ
-            </h3>
-          </div>
-          <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
-            Join
-          </span>
-        </a>
+        {/* Body */}
+        <div className="px-5 sm:px-6 py-5 space-y-6">
+          {/* Contact */}
+          <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                ስልክ ቁጥር
+              </p>
+              {student.phone ? (
+                <>
+                  <p className="font-mono text-sm font-semibold text-slate-900 dark:text-white mb-3">
+                    {student.phone}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      href={`tel:${cleanPhone}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors"
+                    >
+                      <Phone className="h-3.5 w-3.5" />
+                      ደውል
+                    </a>
+                    <a
+                      href={`sms:${cleanPhone}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      መልእክት
+                    </a>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-slate-400 dark:text-slate-500 italic">
+                  ስልክ አልተመዘገበም
+                </p>
+              )}
+            </div>
 
-        {/* Footer note */}
-        <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-          © {new Date().getFullYear()} ባሲራ · Basira
-        </p>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                ኢሜይል
+              </p>
+              <p className="text-sm font-semibold text-slate-900 dark:text-white break-all mb-3">
+                {student.email || '—'}
+              </p>
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <Calendar className="h-3.5 w-3.5" />
+                የተመዘገቡበት፡ {formatDateAmh(student.registeredAt)}
+              </div>
+            </div>
+          </section>
+
+          {/* Summary */}
+          <section className="grid grid-cols-3 gap-3">
+            <MiniStat
+              label="የጨረሱት ኪታቦች"
+              value={`${student.passedCount}/${student.totalCourses}`}
+            />
+            <MiniStat
+              label="አማካይ ነጥብ"
+              value={
+                student.attemptsCount > 0 ? `${student.averageScore}%` : '—'
+              }
+            />
+            <MiniStat
+              label="ጠቅላላ ሙከራዎች"
+              value={String(student.attemptsCount)}
+            />
+          </section>
+
+          {/* Progress bar */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                አጠቃላይ እድገት
+              </h3>
+              <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                {student.progressPercent}%
+              </span>
+            </div>
+            <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
+                style={{ width: `${student.progressPercent}%` }}
+              />
+            </div>
+          </section>
+
+          {/* Lesson breakdown */}
+          <section>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              የደርስ በደርስ ዝርዝር ውጤት
+            </h3>
+
+            {student.breakdown.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 p-6 text-center">
+                <BookOpen className="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600 mb-2" />
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  ምንም ፈተና አልተወሰደም።
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {student.breakdown.map((course) => (
+                  <div
+                    key={course.courseId}
+                    className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div
+                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
+                            course.passed
+                              ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300'
+                          }`}
+                        >
+                          {course.passed ? (
+                            <CheckCircle className="h-4 w-4" />
+                          ) : (
+                            <BookOpen className="h-4 w-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            {course.courseName}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {course.lessons.length} ደርስ · አማካይ{' '}
+                            {course.averagePercent}%
+                          </p>
+                        </div>
+                      </div>
+                      <span
+                        className={`flex-shrink-0 text-xs font-bold tabular-nums ${
+                          course.passed
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-amber-700 dark:text-amber-400'
+                        }`}
+                      >
+                        {course.bestPercent}%
+                      </span>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {course.lessons.map((lesson) => (
+                        <div
+                          key={lesson.lessonNumber}
+                          className="flex items-center justify-between gap-3 px-4 py-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div
+                              className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                                lesson.passed
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                                  : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400'
+                              }`}
+                            >
+                              {lesson.lessonNumber}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                                ደርስ {lesson.lessonNumber}፡ {lesson.score}/
+                                {lesson.total} መለሱ
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {formatDateAmh(lesson.date)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right flex-shrink-0">
+                            <p
+                              className={`text-sm font-bold tabular-nums ${
+                                lesson.passed
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-red-700 dark:text-red-400'
+                              }`}
+                            >
+                              {lesson.percent}%
+                            </p>
+                            <p className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                              {lesson.passed ? 'ተሳክቷል' : 'አልተሳካም'}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        {/* Footer */}
+        <div className="sticky bottom-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-3 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          >
+            ዝጋ
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-3 text-center">
+      <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+        {label}
+      </p>
+      <p className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">
+        {value}
+      </p>
     </div>
   );
 }
