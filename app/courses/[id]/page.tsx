@@ -68,6 +68,21 @@ const amh = {
   /** Shown when the LAST regular lesson was passed today. */
   comeBackTomorrowExam:
     'ነገ ይከፈታል (በቀን አንድ ደርስ/ፈተና ብቻ)',
+
+  // -------------------------------------------------------------------------
+  // Badge labels (free trial + payment gate)
+  // -------------------------------------------------------------------------
+  /** Free-trial badge for lessons 1–3. */
+  badgeFreeLesson: '▶️ ነፃ ደርስ',
+  /** Badge shown for lessons scheduled on a future day. */
+  badgeUnlocksTomorrow: '⏳ ነገ ይከፈታል',
+  /** Badge shown for lessons 4+ when the student hasn't paid. */
+  badgePaymentRequired: '🔒 ክፍያ ይፈልጋል',
+  /** Badge shown for paid students on unlocked lessons. */
+  badgePlay: '▶️ አጫውት',
+  /** Reason line under a payment-locked lesson title. */
+  paymentLockReason:
+    'የ3 ቀን ነፃ ጊዜዎ አልቋል — ለመቀጠል እባክዎ ክፍያ ይፈጽሙ።',
 };
 
 // ---------------------------------------------------------------------------
@@ -77,6 +92,16 @@ const amh = {
 // Example: '/images/course-header.jpg' or any external URL.
 const HEADER_BG_IMAGE =
   'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?auto=format&fit=crop&w=800&q=80';
+
+// ---------------------------------------------------------------------------
+// Free-trial / payment-gate constants
+// ---------------------------------------------------------------------------
+/**
+ * Lessons 1, 2 and 3 are part of the 3-day free trial — one lesson per
+ * day, matching the drip-lock cadence. Lesson 4 and onward require an
+ * approved payment (`payments.status === 'approved'`).
+ */
+const FREE_TRIAL_LESSON_COUNT = 3;
 
 // ---------------------------------------------------------------------------
 // Type definitions
@@ -610,6 +635,78 @@ export default function CoursePage() {
   const [scoresLoading, setScoresLoading] = useState(true);
   const [scoresError, setScoresError] = useState<string | null>(null);
 
+  // -------------------------------------------------------------------------
+  // PAYMENT STATUS (for the free-trial vs. paid badge logic)
+  //
+  //   isPaid         → true only when the latest `payments` row for this
+  //                    user has status === 'approved'.
+  //   paymentLoading → true while the check is in flight. While loading,
+  //                    we do NOT show the payment-required badge so that
+  //                    trial/paid users never briefly see a lock flash.
+  //
+  // A failure here is non-fatal: we simply keep `isPaid` false, which
+  // falls back to the free-trial behaviour for lessons 1–3 and the
+  // payment-required badge for lessons 4+.
+  // -------------------------------------------------------------------------
+  const [isPaid, setIsPaid] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(true);
+
+  useEffect(() => {
+    if (!hasMounted) return;
+    let cancelled = false;
+
+    const fetchPayment = async () => {
+      setPaymentLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setIsPaid(false);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('payments')
+          .select('status, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn('[CoursePage] payment fetch warning:', error.message);
+          setIsPaid(false);
+          return;
+        }
+
+        if (!data || data.length === 0) {
+          setIsPaid(false);
+          return;
+        }
+
+        const status = String(data[0]?.status ?? '').toLowerCase();
+        setIsPaid(status === 'approved');
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[CoursePage] payment fetch unexpected error:', err);
+          setIsPaid(false);
+        }
+      } finally {
+        if (!cancelled) setPaymentLoading(false);
+      }
+    };
+
+    fetchPayment();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMounted]);
+
   useEffect(() => {
     if (!hasMounted) return;
 
@@ -1022,7 +1119,67 @@ export default function CoursePage() {
               // order, into `timelineItems`.
               // ---------------------------------------------------------
               const lock = resolveLock(idx);
-              const isLocked = lock.locked;
+              const dripLocked = lock.locked;
+
+              // 1-based lesson number used for the free-trial window.
+              const lessonNumber = idx + 1;
+
+              // ---------------------------------------------------------
+              // PAYMENT GATE
+              //
+              //   Lessons 1–3  → part of the 3-day free trial.
+              //   Lessons 4+   → require an approved payment.
+              //
+              // While `paymentLoading` is true we treat the user as
+              // "not payment-locked" so trial users don't briefly see a
+              // lock flash before the payment check resolves.
+              // ---------------------------------------------------------
+              const requiresPayment =
+                !paymentLoading &&
+                !isPaid &&
+                lessonNumber > FREE_TRIAL_LESSON_COUNT;
+
+              const paymentLocked = !dripLocked && requiresPayment;
+
+              // Combined lock state drives the disabled button / no nav.
+              const isLocked = dripLocked || paymentLocked;
+
+              // ---------------------------------------------------------
+              // STATUS BADGE — small inline pill next to the title.
+              //
+              //   1. Lessons 1–3 unlocked           → "▶️ ነፃ ደርስ"
+              //   2. Any future-day (locked) lesson → "⏳ ነገ ይከፈታል"
+              //   3. Lessons 4+ unpaid + arrived    → "🔒 ክፍያ ይፈልጋል"
+              //   4. Paid + unlocked lesson         → "▶️ አጫውት"
+              // ---------------------------------------------------------
+              let badge: { label: string; className: string } | null = null;
+
+              if (dripLocked) {
+                // Future day → unlocks tomorrow.
+                badge = {
+                  label: amh.badgeUnlocksTomorrow,
+                  className:
+                    'bg-slate-100 text-slate-600 border-slate-200/80 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700/60',
+                };
+              } else if (paymentLocked) {
+                badge = {
+                  label: amh.badgePaymentRequired,
+                  className:
+                    'bg-amber-100 text-amber-700 border-amber-200/80 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/30',
+                };
+              } else if (lessonNumber <= FREE_TRIAL_LESSON_COUNT) {
+                badge = {
+                  label: amh.badgeFreeLesson,
+                  className:
+                    'bg-emerald-100 text-emerald-700 border-emerald-200/80 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30',
+                };
+              } else if (isPaid) {
+                badge = {
+                  label: amh.badgePlay,
+                  className:
+                    'bg-emerald-100 text-emerald-700 border-emerald-200/80 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30',
+                };
+              }
 
               // Build the numeric lesson id for the `[lessonId]` segment.
               // e.g. "lesson-2" → 2. Falls back to the raw slug safely if
@@ -1069,6 +1226,19 @@ export default function CoursePage() {
                       >
                         {lesson.title}
                       </p>
+
+                      {/* NEW — status badge (free trial / tomorrow / payment) */}
+                      {badge && (
+                        <span
+                          className={[
+                            'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] sm:text-xs font-bold whitespace-nowrap border',
+                            badge.className,
+                          ].join(' ')}
+                        >
+                          {badge.label}
+                        </span>
+                      )}
+
                       {score && !isLocked && (
                         <span
                           className={[
@@ -1085,8 +1255,8 @@ export default function CoursePage() {
                       )}
                     </div>
 
-                    {/* Drip-lock reason line — only rendered when locked */}
-                    {isLocked && (
+                    {/* Drip-lock reason line — only rendered when drip-locked */}
+                    {dripLocked && (
                       <p className="mt-1 text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 flex items-start gap-1.5 leading-snug">
                         <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
                         <span>
@@ -1094,6 +1264,14 @@ export default function CoursePage() {
                             ? amh.comeBackTomorrow
                             : amh.completePrevious}
                         </span>
+                      </p>
+                    )}
+
+                    {/* Payment-lock reason line — only rendered when payment-locked */}
+                    {paymentLocked && (
+                      <p className="mt-1 text-[11px] sm:text-xs font-medium text-amber-600 dark:text-amber-400 flex items-start gap-1.5 leading-snug">
+                        <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                        <span>{amh.paymentLockReason}</span>
                       </p>
                     )}
                   </div>

@@ -33,6 +33,8 @@ import {
   Trophy,
   CheckCircle2,
   AlertCircle,
+  Lock,
+  CreditCard,
 } from 'lucide-react';
 
 interface Lesson {
@@ -71,6 +73,18 @@ interface SavedScore {
 // Once passed, the quiz can no longer be retaken.
 // ---------------------------------------------------------------------------
 const PASS_THRESHOLD_PERCENT = 50;
+
+// ---------------------------------------------------------------------------
+// FREE TRIAL / PAYMENT GATE
+//
+// Lessons 1, 2 and 3 are part of the 3-day free trial — one lesson per
+// day, matching the drip-lock cadence. Lesson 4 onward (and the final
+// exam) require an approved payment (`payments.status === 'approved'`).
+//
+// If an unpaid student lands on a lesson beyond the trial window, we
+// block playback and surface a payment-required modal.
+// ---------------------------------------------------------------------------
+const FREE_TRIAL_LESSON_COUNT = 3;
 
 // ---------------------------------------------------------------------------
 // FINAL EXAM CONSTANTS & HELPERS
@@ -127,6 +141,29 @@ function fisherYatesShuffle<T>(input: T[]): T[] {
     arr[j] = tmp;
   }
   return arr;
+}
+
+/**
+ * Compute the LOCAL (1-based) lesson number within a course.
+ * Course lesson numbers are stored as global values:
+ *   • usul       → 1..11
+ *   • arbain     → 101..111
+ *   • shurut     → 1..7
+ *   • urjuzetul  → 201..225
+ *   • final exam → 999  (sentinel, returns null)
+ *
+ * `% 100` normalises them all to 1..N. Returns null for the final exam
+ * and any non-positive / non-finite values.
+ */
+function getLocalLessonNumber(
+  lessonNumber: number | undefined | null
+): number | null {
+  if (lessonNumber === undefined || lessonNumber === null) return null;
+  const n = Number(lessonNumber);
+  if (!Number.isFinite(n)) return null;
+  if (Math.trunc(n) === FINAL_EXAM_LESSON_ID) return null;
+  const local = Math.trunc(n) % 100;
+  return local >= 1 ? local : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,6 +1199,22 @@ export default function LessonPage() {
   const [loadingSavedScore, setLoadingSavedScore] = useState(false);
 
   // ------------------------------------------------------------------
+  // PAYMENT GATE STATE
+  //
+  //   isPaid          → true only when the latest `payments` row for
+  //                     this user has status === 'approved'.
+  //   paymentLoading  → true while the payment check is in flight.
+  //                     While loading, we deliberately do NOT show the
+  //                     payment modal — this avoids a lock flash for
+  //                     trial or paid students on first paint.
+  //   showPaymentModal → controls the modal visibility. Auto-opened
+  //                     when a payment-required lesson is opened.
+  // ------------------------------------------------------------------
+  const [isPaid, setIsPaid] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(true);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+
+  // ------------------------------------------------------------------
   // RETAKE LOCK — derived from the previously saved score.
   //
   //   hasPassedBefore → the student already earned >= 50% on this quiz.
@@ -1194,6 +1247,105 @@ export default function LessonPage() {
     setSelectedAnswers({});
     setCurrentStep(0);
   }, [lesson]);
+
+  // ------------------------------------------------------------------
+  // PAYMENT STATUS FETCH (for the free-trial gate)
+  //
+  // A failure is non-fatal: `isPaid` remains false, and lessons 1–3
+  // still work as free-trial content, while lessons 4+ show the
+  // payment-required modal.
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!hasMounted) return;
+    let cancelled = false;
+
+    const fetchPayment = async () => {
+      setPaymentLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setIsPaid(false);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('payments')
+          .select('status, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn('[Lesson] payment fetch warning:', error.message);
+          setIsPaid(false);
+          return;
+        }
+
+        if (!data || data.length === 0) {
+          setIsPaid(false);
+          return;
+        }
+
+        const status = String(data[0]?.status ?? '').toLowerCase();
+        setIsPaid(status === 'approved');
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[Lesson] payment fetch unexpected error:', err);
+          setIsPaid(false);
+        }
+      } finally {
+        if (!cancelled) setPaymentLoading(false);
+      }
+    };
+
+    fetchPayment();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMounted]);
+
+  // ------------------------------------------------------------------
+  // LOCAL LESSON NUMBER + PAYMENT REQUIREMENT
+  //
+  //   localLessonNumber → 1-based lesson index within the course
+  //                       (e.g. lesson-4 of usul → 4; arbaeen-lesson-4
+  //                       has lessonNumber 104 → % 100 → 4).
+  //                       null for the final exam and for any
+  //                       non-numeric lesson numbers.
+  //
+  //   requiresPayment   → true when the student is unpaid AND the
+  //                       lesson is beyond the free-trial window
+  //                       (lesson 4+) OR the final exam.
+  //
+  // While `paymentLoading` is true we return false so trial/paid users
+  // never briefly see the payment modal before the check resolves.
+  // ------------------------------------------------------------------
+  const localLessonNumber = lesson ? getLocalLessonNumber(lesson.lessonNumber) : null;
+
+  const requiresPayment =
+    !paymentLoading &&
+    !isPaid &&
+    (isFinalExam ||
+      (localLessonNumber !== null &&
+        localLessonNumber > FREE_TRIAL_LESSON_COUNT));
+
+  // Auto-open the payment modal whenever the student lands on a
+  // payment-required lesson. Auto-close it if the requirement is
+  // lifted (e.g. after the payment fetch resolves as approved).
+  useEffect(() => {
+    if (requiresPayment) {
+      setShowPaymentModal(true);
+    } else {
+      setShowPaymentModal(false);
+    }
+  }, [requiresPayment]);
 
   // ------------------------------------------------------------------
   // Fetch previously saved score from `quiz_results` on lesson change.
@@ -1423,6 +1575,11 @@ export default function LessonPage() {
   // Audio ended handler (unchanged).
   const handleAudioEnded = () => {
     if (isAudioFinished) return; // idempotent
+    if (requiresPayment) {
+      // Defensive: block the unlock path if payment is required.
+      setShowPaymentModal(true);
+      return;
+    }
     console.log('Audio completed → unlocking + auto-starting quiz...');
     setIsAudioFinished(true);
     setIsQuizUnlocked(true);
@@ -1548,9 +1705,16 @@ export default function LessonPage() {
   // `goToQuiz` also works for lessons without audio (including the
   // final exam): if there is no audio, the audio gate is bypassed and
   // the quiz tab unlocks immediately.
+  //
+  // PAYMENT GATE — if the current lesson requires payment, the quiz
+  // is not reachable; we surface the modal instead.
   // ------------------------------------------------------------------
   const goToQuiz = () => {
     if (!lesson) return;
+    if (requiresPayment) {
+      setShowPaymentModal(true);
+      return;
+    }
     // If the lesson has audio, keep the strict audio-finish gate.
     if (lesson.audioUrl && !isAudioFinished) return;
     setIsAudioFinished(true);
@@ -1761,95 +1925,126 @@ export default function LessonPage() {
             )}
 
           <div className="flex-shrink-0 p-3 bg-slate-900 border-t border-slate-800">
-            {lesson.audioUrl ? (
-              <div className="mb-3">
-                {/*
-                  Audio element with download restrictions:
-                  • controlsList="nodownload"   → removes native download UI
-                  • onContextMenu preventDefault → blocks right-click "Save audio as…"
-                  • No direct download button or link is exposed in the UI
-                */}
-                <audio
-                  ref={audioRef}
-                  controls
-                  controlsList="nodownload"
-                  onContextMenu={(e) => e.preventDefault()}
-                  className="w-full rounded-lg"
-                  src={lesson.audioUrl}
-                  preload="metadata"
-                  onEnded={() => {
-                    setIsAudioFinished(true);
-                    handleAudioEnded();
-                  }}
-                  onTimeUpdate={handleAudioTimeUpdate}
-                >
-                  Your browser does not support the audio element.
-                </audio>
-              </div>
-            ) : !isFinalExam ? (
-              <div className="text-center py-2 text-slate-500 mb-3">
-                <Volume2 className="h-6 w-6 mx-auto opacity-50" />
-                <p className="text-xs">ኦዲዮ አልተገኘም</p>
-              </div>
-            ) : null}
-
-            {loadingQuiz && (
-              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
-                ጥያቄዎች በመጫን ላይ ናቸው...
-              </div>
-            )}
-
-            {!loadingQuiz && quizError && (
-              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
-                {quizError}
-                <button
-                  onClick={retryFetch}
-                  className="mt-2 inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
-                >
-                  እንደገና ሞክር
-                </button>
-              </div>
-            )}
-
-            {!loadingQuiz && !quizError && !quizAvailable && (
-              <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
-                ለዚህ ትምህርት ምንም ጥያቄ አልተገኘም።
-                <button
-                  onClick={retryFetch}
-                  className="mt-2 inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
-                >
-                  እንደገና ሞክር
-                </button>
-              </div>
-            )}
-
-            {/* Start Quiz button — gated by isAudioFinished (or absence of audio) */}
-            {!loadingQuiz &&
-              quizAvailable &&
-              (isAudioFinished || !lesson.audioUrl) && (
+            {/* =========================================================
+                PAYMENT GATE — when the student is unpaid and the lesson
+                is beyond the free-trial window, replace the audio player
+                and quiz CTA with a locked prompt that opens the modal.
+                The audio element is intentionally NOT rendered so the
+                track cannot be played or downloaded.
+            ========================================================= */}
+            {requiresPayment ? (
+              <div className="rounded-xl border border-amber-700/70 bg-amber-950/40 p-4 text-center">
+                <div className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-amber-900/60">
+                  <Lock className="h-5 w-5 text-amber-400" />
+                </div>
+                <p className="text-sm font-bold text-amber-200">
+                  የ3 ቀን ነፃ የትምህርት ጊዜዎ ተጠናቋል።
+                </p>
+                <p className="mt-1 text-xs text-amber-300/80 leading-relaxed">
+                  በቀጣይ ያሉትን ደርሶች ለመማር እባክዎን ክፍያ ይፈጽሙ።
+                </p>
                 <button
                   type="button"
-                  onClick={goToQuiz}
-                  className={[
-                    'w-full py-3 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg',
-                    hasPassedBefore
-                      ? 'bg-emerald-700 active:bg-emerald-800'
-                      : 'bg-emerald-600 active:bg-emerald-700',
-                  ].join(' ')}
+                  onClick={() => setShowPaymentModal(true)}
+                  className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
                 >
-                  <BookOpen className="h-5 w-5" />
-                  {hasPassedBefore ? 'ውጤትህን ተመልከት' : 'ፈተናውን ጀምር'}
+                  <CreditCard className="h-4 w-4" />
+                  ክፍያ ይፈጽሙ
                 </button>
-              )}
+              </div>
+            ) : (
+              <>
+                {lesson.audioUrl ? (
+                  <div className="mb-3">
+                    {/*
+                      Audio element with download restrictions:
+                      • controlsList="nodownload"   → removes native download UI
+                      • onContextMenu preventDefault → blocks right-click "Save audio as…"
+                      • No direct download button or link is exposed in the UI
+                    */}
+                    <audio
+                      ref={audioRef}
+                      controls
+                      controlsList="nodownload"
+                      onContextMenu={(e) => e.preventDefault()}
+                      className="w-full rounded-lg"
+                      src={lesson.audioUrl}
+                      preload="metadata"
+                      onEnded={() => {
+                        setIsAudioFinished(true);
+                        handleAudioEnded();
+                      }}
+                      onTimeUpdate={handleAudioTimeUpdate}
+                    >
+                      Your browser does not support the audio element.
+                    </audio>
+                  </div>
+                ) : !isFinalExam ? (
+                  <div className="text-center py-2 text-slate-500 mb-3">
+                    <Volume2 className="h-6 w-6 mx-auto opacity-50" />
+                    <p className="text-xs">ኦዲዮ አልተገኘም</p>
+                  </div>
+                ) : null}
 
-            {!loadingQuiz &&
-              quizAvailable &&
-              lesson.audioUrl &&
-              !isAudioFinished && (
-                <p className="text-xs text-slate-500 text-center">
-                  ፈተናውን ለመጀመር ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
-                </p>
-              )}
+                {loadingQuiz && (
+                  <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl animate-pulse">
+                    ጥያቄዎች በመጫን ላይ ናቸው...
+                  </div>
+                )}
+
+                {!loadingQuiz && quizError && (
+                  <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
+                    {quizError}
+                    <button
+                      onClick={retryFetch}
+                      className="mt-2 inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+                    >
+                      እንደገና ሞክር
+                    </button>
+                  </div>
+                )}
+
+                {!loadingQuiz && !quizError && !quizAvailable && (
+                  <div className="py-3 bg-slate-800 text-center text-slate-400 text-sm rounded-xl">
+                    ለዚህ ትምህርት ምንም ጥያቄ አልተገኘም።
+                    <button
+                      onClick={retryFetch}
+                      className="mt-2 inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+                    >
+                      እንደገና ሞክር
+                    </button>
+                  </div>
+                )}
+
+                {/* Start Quiz button — gated by isAudioFinished (or absence of audio) */}
+                {!loadingQuiz &&
+                  quizAvailable &&
+                  (isAudioFinished || !lesson.audioUrl) && (
+                    <button
+                      type="button"
+                      onClick={goToQuiz}
+                      className={[
+                        'w-full py-3 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg',
+                        hasPassedBefore
+                          ? 'bg-emerald-700 active:bg-emerald-800'
+                          : 'bg-emerald-600 active:bg-emerald-700',
+                      ].join(' ')}
+                    >
+                      <BookOpen className="h-5 w-5" />
+                      {hasPassedBefore ? 'ውጤትህን ተመልከት' : 'ፈተናውን ጀምር'}
+                    </button>
+                  )}
+
+                {!loadingQuiz &&
+                  quizAvailable &&
+                  lesson.audioUrl &&
+                  !isAudioFinished && (
+                    <p className="text-xs text-slate-500 text-center">
+                      ፈተናውን ለመጀመር ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
+                    </p>
+                  )}
+              </>
+            )}
           </div>
         </div>
       ) : (
@@ -2098,6 +2293,74 @@ export default function LessonPage() {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* =============================================================== */}
+      {/* PAYMENT-REQUIRED MODAL                                          */}
+      {/*                                                                 */}
+      {/* Rendered when an unpaid student opens a lesson beyond the      */}
+      {/* free-trial window (lesson 4+ or the final exam). Auto-opened   */}
+      {/* on mount and dismissible via the X button or the backdrop.     */}
+      {/* =============================================================== */}
+      {showPaymentModal && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payment-modal-title"
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
+            onClick={() => setShowPaymentModal(false)}
+            aria-hidden="true"
+          />
+
+          {/* Dialog */}
+          <div className="relative w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 sm:p-7">
+            <button
+              type="button"
+              onClick={() => setShowPaymentModal(false)}
+              aria-label="ዝጋ"
+              className="absolute top-3 right-3 p-2 rounded-xl text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-950/70 border border-amber-800 mx-auto mb-4">
+              <Lock className="h-7 w-7 text-amber-400" />
+            </div>
+
+            <h2
+              id="payment-modal-title"
+              className="text-lg sm:text-xl font-bold text-white text-center mb-2"
+            >
+              ክፍያ ያስፈልጋል
+            </h2>
+
+            <p className="text-sm text-slate-300 text-center leading-relaxed mb-6">
+              የ3 ቀን ነፃ የትምህርት ጊዜዎ ተጠናቋል። በቀጣይ ያሉትን ደርሶች ለመማር
+              እባክዎን ክፍያ ይፈጽሙ።
+            </p>
+
+            <Link
+              href="/dashboard/payment"
+              onClick={() => setShowPaymentModal(false)}
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-900/30 transition-colors"
+            >
+              <CreditCard className="h-4 w-4" />
+              ወደ ክፍያ ገፅ ይሂዱ
+            </Link>
+
+            <button
+              type="button"
+              onClick={() => setShowPaymentModal(false)}
+              className="mt-3 w-full text-center text-xs text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              በኋላ እከፍላለሁ
+            </button>
+          </div>
         </div>
       )}
     </div>

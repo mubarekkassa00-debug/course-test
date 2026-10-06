@@ -48,6 +48,13 @@ type DashboardUser = {
   id?: string;
   email?: string;
   full_name?: string;
+  /**
+   * ISO timestamp of the user's signup, sourced from the Supabase auth
+   * user object (`user.created_at`). Used to compute the 3-day free
+   * trial window. When undefined, the user is treated as "outside the
+   * trial" — the payment banner will show as before.
+   */
+  created_at?: string;
 };
 
 type CourseStatus = 'not_started' | 'in_progress' | 'passed';
@@ -84,6 +91,16 @@ const REQUIRED_COURSES: CourseMeta[] = [
 
 /** Minimum percentage required to pass a course (matches backend). */
 const PASS_THRESHOLD_PERCENT = 50;
+
+// ---------------------------------------------------------------------------
+// FREE TRIAL — 3 days from signup.
+//
+// A student whose auth-user `created_at` is at most 3 days old is
+// considered to be inside the free trial window. During the trial:
+//   • the "pay now" warning banner is replaced with an informational badge;
+//   • course content is unlocked (equivalent to a paid user).
+// ---------------------------------------------------------------------------
+const FREE_TRIAL_DAYS = 3;
 
 // ---------------------------------------------------------------------------
 // COURSE CAPACITY MODEL
@@ -414,6 +431,9 @@ export default function DashboardPage() {
           id: sessionUser.id,
           email: sessionUser.email,
           full_name: sessionUser.user_metadata?.full_name,
+          // Capture the auth-user `created_at` so the free-trial window
+          // can be computed without an extra network round-trip.
+          created_at: sessionUser.created_at,
         });
         setLoading(false);
       } else {
@@ -855,6 +875,32 @@ export default function DashboardPage() {
   // True only when the profiles table reports the user's role as 'admin'.
   const isAdmin = userRole === 'admin';
 
+  // -------------------------------------------------------------------------
+  // FREE TRIAL DERIVATIONS
+  //
+  //   daysSinceRegistration — whole days elapsed since the auth user was
+  //                           created. `null` when the timestamp is missing.
+  //   isInFreeTrial         — true while the student is inside the 3-day
+  //                           window. Drives the "trial badge" instead of
+  //                           the "pay now" warning banner.
+  //   hasAccess             — the union of approved payment OR active trial;
+  //                           used to unlock course content for both paid
+  //                           students and trial users.
+  // -------------------------------------------------------------------------
+  const daysSinceRegistration: number | null = user?.created_at
+    ? Math.floor(
+        (Date.now() - new Date(user.created_at).getTime()) /
+          (1000 * 60 * 60 * 24)
+      )
+    : null;
+
+  const isInFreeTrial =
+    daysSinceRegistration !== null &&
+    daysSinceRegistration <= FREE_TRIAL_DAYS;
+
+  // Course content is unlocked for paid users AND for students in trial.
+  const hasAccess = isPaymentApproved || isInFreeTrial;
+
   // Total number of courses comes from the live catalogue (falls back to 4).
   const totalCoursesCount = courseCatalogue.length;
 
@@ -1099,9 +1145,32 @@ export default function DashboardPage() {
         )}
 
         {/* ============================================================ */}
-        {/* DYNAMIC PAYMENT STATUS BANNER                                 */}
+        {/* FREE-TRIAL BADGE — shown only when unpaid + still in trial    */}
         {/* ============================================================ */}
-        {!paymentLoading && paymentStatus === 'none' && (
+        {!paymentLoading && paymentStatus === 'none' && isInFreeTrial && (
+          <div className="mb-5 sm:mb-6 rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-gradient-to-r from-emerald-50 to-emerald-100/60 dark:from-emerald-950/40 dark:to-emerald-900/20 p-4 sm:p-5 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/60">
+                <Sparkles className="h-5 w-5 text-emerald-700 dark:text-emerald-300" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm sm:text-base font-bold text-emerald-900 dark:text-emerald-100">
+                  የ3 ቀን ነፃ የትምህርት ጊዜ ላይ ነዎት
+                </p>
+                <p className="mt-0.5 text-xs sm:text-sm text-emerald-800/90 dark:text-emerald-200/80 leading-relaxed">
+                  ሁሉንም ትምህርቶች በነጻ ለማጥናት ይህ የእርስዎ ጊዜ ነው። ከ 3 ቀን
+                  በኋላ ለመቀጠል ክፍያ ያስፈልጋል።
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* DYNAMIC PAYMENT STATUS BANNER — pay-now shown only when      */}
+        {/* unpaid AND outside the free-trial window                     */}
+        {/* ============================================================ */}
+        {!paymentLoading && paymentStatus === 'none' && !isInFreeTrial && (
           <div className="mb-5 sm:mb-6 rounded-2xl border border-amber-300 dark:border-amber-800 bg-gradient-to-r from-amber-50 to-amber-100/60 dark:from-amber-950/40 dark:to-amber-900/20 p-4 sm:p-5 shadow-sm">
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
               <div className="flex items-start gap-3 flex-1 min-w-0">
@@ -1240,10 +1309,10 @@ export default function DashboardPage() {
         <div
           className={[
             'mt-6 relative bg-white dark:bg-slate-800 rounded-2xl shadow-md ring-1 ring-emerald-100 dark:ring-emerald-900/40 border border-emerald-100 dark:border-emerald-900/40 p-6 overflow-hidden',
-            !isPaymentApproved ? 'opacity-70' : '',
+            !hasAccess ? 'opacity-70' : '',
           ].join(' ')}
         >
-          {!paymentLoading && !isPaymentApproved && (
+          {!paymentLoading && !hasAccess && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/40 dark:bg-slate-900/40 backdrop-blur-[2px]">
               <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-4 py-2 shadow-lg border border-slate-200 dark:border-slate-700">
                 <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
@@ -1365,7 +1434,7 @@ export default function DashboardPage() {
             <h3 className="text-xl font-bold text-slate-800 dark:text-white">
               የመማሪያ ማዕከላት
             </h3>
-            {!paymentLoading && !isPaymentApproved && (
+            {!paymentLoading && !hasAccess && (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
                 <Lock className="h-3 w-3" />
                 ተቆልፏል
@@ -1378,17 +1447,17 @@ export default function DashboardPage() {
             {/* 1. የላቁ ኮርሶች — ACTIVE                               */}
             {/* ------------------------------------------------------ */}
             <Link
-              href={isPaymentApproved ? '/courses' : '#'}
-              aria-disabled={!isPaymentApproved}
-              tabIndex={isPaymentApproved ? 0 : -1}
+              href={hasAccess ? '/courses' : '#'}
+              aria-disabled={!hasAccess}
+              tabIndex={hasAccess ? 0 : -1}
               className={[
                 'group relative bg-white/80 dark:bg-slate-800/70 rounded-2xl border border-slate-200/70 dark:border-slate-700/70 p-4 sm:p-5 transition-all duration-300 touch-manipulation',
-                isPaymentApproved
+                hasAccess
                   ? 'hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-700 cursor-pointer'
                   : 'opacity-60 pointer-events-none select-none',
               ].join(' ')}
             >
-              {!isPaymentApproved && (
+              {!hasAccess && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
                     <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
@@ -1423,7 +1492,7 @@ export default function DashboardPage() {
                 በቅርብ ቀን
               </span>
 
-              {!isPaymentApproved && (
+              {!hasAccess && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
                     <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
@@ -1458,7 +1527,7 @@ export default function DashboardPage() {
                 በቅርብ ቀን
               </span>
 
-              {!isPaymentApproved && (
+              {!hasAccess && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
                     <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
@@ -1493,7 +1562,7 @@ export default function DashboardPage() {
                 በቅርብ ቀን
               </span>
 
-              {!isPaymentApproved && (
+              {!hasAccess && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/50 dark:bg-slate-900/50 backdrop-blur-[1px]">
                   <div className="flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-3 py-1.5 shadow-md border border-slate-200 dark:border-slate-700">
                     <Lock className="h-4 w-4 text-amber-600 dark:text-amber-400" />
