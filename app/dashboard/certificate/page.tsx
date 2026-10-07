@@ -381,35 +381,46 @@ export default function CertificatePage() {
 
   const isEligible = isPaymentApproved && allCoursesPassed;
 
-  // -------------------------------------------------------------------------
-  // System-wide score (used for the eligibility banner text).
-  //
-  // `systemTotalMaxScore` is guarded with `FALLBACK_TOTAL_MAX_SCORE` (390) so
-  // the amber banner can never render "/ 0 (0%)" even if `courseStatuses` is
-  // momentarily empty (e.g. a transient Supabase hiccup or a race during the
-  // first render after `dataLoading` flips to `false`).
-  //
-  // The percentage uses the strict `safeTotalMax > 0 ? … : 0` guard so a
-  // zero/undefined denominator can never produce NaN / Infinity.
-  // -------------------------------------------------------------------------
-  const systemEarnedScore = courseStatuses.reduce(
+  // ---- System-wide score ----
+  // Sum of raw earned scores and sum of per-course capacities across the
+  // four required courses. These are the canonical values used by both the
+  // debug log and the eligibility banner text.
+  const earnedScore = courseStatuses.reduce(
     (acc, c) => acc + (Number(c.earnedScore) || 0),
     0
   );
-  const systemTotalMaxScore = courseStatuses.reduce(
+  const totalMaxScore = courseStatuses.reduce(
     (acc, c) => acc + (Number(c.totalMaxScore) || 0),
     0
   );
 
-  const safeTotalMax =
-    systemTotalMaxScore > 0
-      ? systemTotalMaxScore
+  // Placeholders for the debug log — kept so the shape matches the
+  // requested payload. `reading_progress` is not queried by this page, and
+  // `totalLessonsCount` reflects the four required Kitabs only.
+  const readingProgressCount = 0;
+  const totalLessonsCount = courseStatuses.length;
+
+  // ---- Safe banner values ----
+  // `safeMax` never falls below 390 (the full curriculum capacity), so the
+  // banner can never render "/ 0 (0%)". The percentage guard prevents
+  // NaN / Infinity even if both inputs are somehow zero.
+  const safeMax =
+    totalMaxScore && totalMaxScore > 0
+      ? totalMaxScore
       : FALLBACK_TOTAL_MAX_SCORE;
-  const safeEarned = systemEarnedScore || 0;
-  const calcPercentage =
-    safeTotalMax > 0
-      ? Math.round((safeEarned / safeTotalMax) * 100)
-      : 0;
+  const safeEarned = earnedScore || 0;
+  const percent = Math.round((safeEarned / safeMax) * 100);
+
+  // ---- TEMPORARY DEBUG ----
+  // Logs the exact calculated values to the browser DevTools console.
+  // Filter DevTools by `CERTIFICATE_DEBUG` to see only these.
+  console.log('CERTIFICATE_DEBUG:', {
+    earnedScore,
+    totalMaxScore,
+    isEligible,
+    readingProgressCount,
+    totalLessonsCount,
+  });
 
   // Final display name: profile-based name → email prefix → 'ተማሪ'.
   // (userFullName is already resolved to 'Ali' if the profile + metadata
@@ -653,11 +664,11 @@ export default function CertificatePage() {
                 </p>
 
                 {/* Current system-wide score snapshot.
-                    Uses the guarded `safeEarned` / `safeTotalMax` values so
-                    the denominator is never 0 and the percentage is always
-                    a finite integer. */}
+                    Uses the guarded `safeEarned` / `safeMax` / `percent`
+                    values so the denominator can never be 0 and the
+                    percentage is always a finite integer. */}
                 <p className="text-xs sm:text-sm font-semibold text-amber-900/90 dark:text-amber-100/85 leading-relaxed mb-5">
-                  የአሁኑ ውጤት: {safeEarned} / {safeTotalMax} ({calcPercentage}%)
+                  የአሁኑ ውጤት: {safeEarned} / {safeMax} ({percent}%)
                 </p>
 
                 {/* Checklist */}
