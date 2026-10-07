@@ -934,10 +934,11 @@ function generateCertificatePdf(opts: {
       // ---------------------------------------------------------------------
       // Digital signature — embedded from `public/signature.png`
       //
-      // The PNG floats immediately above the horizontal rule, centered on
-      // the signature column. PDFKit preserves the PNG's alpha channel, so
-      // a correctly-authored transparent PNG renders cleanly with no
-      // background box.
+      // Rendered larger so it is clearly visible above the signature line.
+      // Uses the fixed dimensions requested: 180×65pt box at (cx - 90, 405).
+      //
+      // PDFKit preserves the PNG's alpha channel, so a correctly-authored
+      // transparent PNG renders cleanly with no background box.
       //
       // If the file is missing or unreadable, `loadPublicImage` returns
       // `null` and we simply skip the image — the rule line and caption
@@ -948,16 +949,11 @@ function generateCertificatePdf(opts: {
 
       const signatureBuffer = loadPublicImage('signature.png');
       if (signatureBuffer) {
-        const sigBoxW = 180;
-        const sigBoxH = 45;
-        const sigBoxX = cx - sigBoxW / 2;
-        const sigBoxY = sigY - sigBoxH - 4; // sits just above the rule line
-
         try {
-          doc.image(signatureBuffer, sigBoxX, sigBoxY, {
-            fit: [sigBoxW, sigBoxH],
-            align: 'center',
-            valign: 'bottom',
+          doc.image(signatureBuffer, cx - 90, 405, {
+            width: 180,
+            height: 65,
+            fit: [180, 65],
           });
         } catch (sigErr) {
           console.warn(
