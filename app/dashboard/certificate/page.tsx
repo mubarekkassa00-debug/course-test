@@ -49,6 +49,13 @@ const COURSE_CAPACITY: Record<string, number> = {
 const DEFAULT_COURSE_CAPACITY = 85;
 const PASS_THRESHOLD_PERCENT = 50;
 
+/**
+ * Fallback total curriculum capacity — the sum of every required course's
+ * capacity (85 + 85 + 65 + 155 = 390). Used only as a defensive default so
+ * the eligibility banner never renders "/ 0 (0%)".
+ */
+const FALLBACK_TOTAL_MAX_SCORE = 390;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -374,9 +381,17 @@ export default function CertificatePage() {
 
   const isEligible = isPaymentApproved && allCoursesPassed;
 
-  // ---- System-wide score (used for the eligibility warning text) ----
-  // Summed across the four required courses. `safeTotalMax` is guarded so a
-  // missing / zero capacity can never produce NaN / Infinity.
+  // -------------------------------------------------------------------------
+  // System-wide score (used for the eligibility banner text).
+  //
+  // `systemTotalMaxScore` is guarded with `FALLBACK_TOTAL_MAX_SCORE` (390) so
+  // the amber banner can never render "/ 0 (0%)" even if `courseStatuses` is
+  // momentarily empty (e.g. a transient Supabase hiccup or a race during the
+  // first render after `dataLoading` flips to `false`).
+  //
+  // The percentage uses the strict `safeTotalMax > 0 ? … : 0` guard so a
+  // zero/undefined denominator can never produce NaN / Infinity.
+  // -------------------------------------------------------------------------
   const systemEarnedScore = courseStatuses.reduce(
     (acc, c) => acc + (Number(c.earnedScore) || 0),
     0
@@ -385,10 +400,15 @@ export default function CertificatePage() {
     (acc, c) => acc + (Number(c.totalMaxScore) || 0),
     0
   );
-  const safeTotalMax = systemTotalMaxScore || 0;
-  const systemPercentage =
+
+  const safeTotalMax =
+    systemTotalMaxScore > 0
+      ? systemTotalMaxScore
+      : FALLBACK_TOTAL_MAX_SCORE;
+  const safeEarned = systemEarnedScore || 0;
+  const calcPercentage =
     safeTotalMax > 0
-      ? Math.round((systemEarnedScore / safeTotalMax) * 100)
+      ? Math.round((safeEarned / safeTotalMax) * 100)
       : 0;
 
   // Final display name: profile-based name → email prefix → 'ተማሪ'.
@@ -632,10 +652,12 @@ export default function CertificatePage() {
                   ማግኘት እንዲሁም ክፍያዎ ማጽደቅ ይኖርብዎታል።
                 </p>
 
-                {/* Current system-wide score snapshot */}
+                {/* Current system-wide score snapshot.
+                    Uses the guarded `safeEarned` / `safeTotalMax` values so
+                    the denominator is never 0 and the percentage is always
+                    a finite integer. */}
                 <p className="text-xs sm:text-sm font-semibold text-amber-900/90 dark:text-amber-100/85 leading-relaxed mb-5">
-                  የአሁኑ ውጤት: {systemEarnedScore} / {safeTotalMax} (
-                  {systemPercentage}%)
+                  የአሁኑ ውጤት: {safeEarned} / {safeTotalMax} ({calcPercentage}%)
                 </p>
 
                 {/* Checklist */}
