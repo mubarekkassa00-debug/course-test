@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useCallback, FormEvent } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import {
@@ -11,7 +12,6 @@ import {
   Eye,
   EyeOff,
   Loader2,
-  GraduationCap,
   BookOpen,
   Library,
   AlertCircle,
@@ -222,9 +222,13 @@ export default function LoginPage() {
         <div className="rounded-3xl border border-emerald-500/20 bg-slate-900/90 shadow-2xl shadow-emerald-950/40 backdrop-blur-md px-6 py-8 sm:px-8 sm:py-10">
           {/* -------------------- Header -------------------- */}
           <div className="text-center mb-8">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/40">
-              <GraduationCap className="h-7 w-7 text-white" />
-            </div>
+            <Image
+              src="/logo.png"
+              alt="Basira Logo"
+              width={56}
+              height={56}
+              className="rounded-2xl mx-auto mb-3 shadow-lg object-contain"
+            />
             <h1 className="text-2xl font-extrabold text-white">
               ባሲራ{' '}
               <span className="font-light text-emerald-300/80">

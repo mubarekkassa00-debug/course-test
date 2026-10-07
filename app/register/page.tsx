@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, FormEvent } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
@@ -14,7 +15,6 @@ import {
   Loader2,
   Eye,
   EyeOff,
-  GraduationCap,
   BookOpen,
   Library,
 } from 'lucide-react';
@@ -434,9 +434,13 @@ export default function RegisterPage() {
         <div className="rounded-3xl border border-emerald-500/20 bg-slate-900/90 shadow-2xl shadow-emerald-950/40 backdrop-blur-md px-5 py-6 sm:px-8 sm:py-9">
           {/* -------------------- Header -------------------- */}
           <div className="text-center mb-5 sm:mb-6">
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/40">
-              <GraduationCap className="h-6 w-6 text-white" />
-            </div>
+            <Image
+              src="/logo.png"
+              alt="Basira Logo"
+              width={56}
+              height={56}
+              className="rounded-2xl mx-auto mb-3 shadow-lg object-contain"
+            />
             <h1 className="text-2xl font-extrabold text-white">
               ባሲራ{' '}
               <span className="font-light text-emerald-300/80">(Basira)</span>
