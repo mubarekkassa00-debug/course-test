@@ -75,7 +75,7 @@ function getCourseCapacity(slug: string): number {
 /**
  * Build a per-course status entry from raw `quiz_results` rows.
  *
- * The percentage is computed with a strict `totalMaxScore > 0` guard so a
+ * The percentage is computed with a strict `safeTotalMax > 0` guard so a
  * zero-capacity course can never produce NaN / Infinity. A course is only
  * considered passed when it actually has capacity AND the earned percentage
  * meets the pass threshold.
@@ -94,20 +94,22 @@ function buildCourseStatuses(rawRows: any[]): CourseStatusEntry[] {
     const earned = earnedByCourse.get(slug) ?? 0;
     const totalMaxScore = getCourseCapacity(slug);
 
-    // Division-by-zero guard: a zero (or negative) capacity yields 0%.
+    // ---- Division-by-zero fix ----
+    // Coerce any non-finite / missing value to 0, then guard the division.
+    const safeTotalMax = totalMaxScore || 0;
     const percentage =
-      totalMaxScore > 0
-        ? Math.min(100, Math.round((earned / totalMaxScore) * 100))
+      safeTotalMax > 0
+        ? Math.min(100, Math.round((earned / safeTotalMax) * 100))
         : 0;
 
     return {
       slug,
       displayName,
       percent: percentage,
-      totalMaxScore,
+      totalMaxScore: safeTotalMax,
       // Eligibility requires BOTH a real capacity AND a passing percentage.
       passed:
-        totalMaxScore > 0 && percentage >= PASS_THRESHOLD_PERCENT,
+        safeTotalMax > 0 && percentage >= PASS_THRESHOLD_PERCENT,
     };
   });
 }
@@ -135,6 +137,19 @@ function readErrorMessage(err: unknown): string {
     }
   }
   return String(err);
+}
+
+/**
+ * Extract the first non-empty string from a list of candidates.
+ * Used to pick the best display name from multiple possible sources.
+ */
+function pickFirstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value.trim();
+    }
+  }
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +188,15 @@ export default function CertificatePage() {
   }, []);
 
   // -------------------------------------------------------------------------
-  // AUTH GUARD
+  // AUTH GUARD + DISPLAY NAME RESOLUTION
+  //
+  // Name priority chain (first non-empty wins):
+  //   1. profiles.full_name              ← PRIMARY (matches the dashboard)
+  //   2. profiles.display_name           ← alternate profile column
+  //   3. user_metadata.full_name
+  //   4. user_metadata.display_name
+  //   5. Capitalized email prefix        ← cosmetic fallback
+  //   6. 'ተማሪ'                            ← absolute last resort
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -195,28 +218,69 @@ export default function CertificatePage() {
         setUserId(user.id);
         setUserEmail(user.email ?? null);
 
-        // Preferred source for the display name is user_metadata.full_name.
-        const metaFullName = (user.user_metadata?.full_name as
-          | string
-          | undefined) ?? null;
-        setUserFullName(metaFullName);
+        // ---- 1 & 2. Query the profiles table FIRST (source of truth). ----
+        let profileFullName = '';
+        let profileDisplayName = '';
 
-        setAuthLoading(false);
+        try {
+          // Try both `full_name` and `display_name` in a single query so we
+          // don't need to guess which column the schema actually has.
+          const { data: profile, error: profileErr } = await supabase
+            .from('profiles')
+            .select('full_name, display_name')
+            .eq('id', user.id)
+            .maybeSingle();
 
-        // Fallback: pull full_name from `profiles` if metadata was missing.
-        if (!metaFullName) {
+          if (profileErr) {
+            // Non-fatal: fall through to metadata / email.
+            console.warn(
+              '[Certificate] profiles lookup warning:',
+              profileErr.message
+            );
+          } else if (profile) {
+            profileFullName = pickFirstNonEmptyString(
+              (profile as any).full_name
+            );
+            profileDisplayName = pickFirstNonEmptyString(
+              (profile as any).display_name
+            );
+          }
+        } catch (profileCatch) {
+          // If the schema doesn't expose `display_name`, retry with just
+          // `full_name` so we still get a value when possible.
           try {
-            const { data: profile } = await supabase
+            const { data: fallbackProfile } = await supabase
               .from('profiles')
               .select('full_name')
               .eq('id', user.id)
               .maybeSingle();
-            if (!cancelled && profile?.full_name) {
-              setUserFullName(String(profile.full_name));
-            }
+            profileFullName = pickFirstNonEmptyString(
+              (fallbackProfile as any)?.full_name
+            );
           } catch {
             /* silent — cosmetic only */
           }
+        }
+
+        // ---- 3 & 4. Fall back to auth user_metadata. ----
+        const metaFullName = pickFirstNonEmptyString(
+          user.user_metadata?.full_name
+        );
+        const metaDisplayName = pickFirstNonEmptyString(
+          user.user_metadata?.display_name
+        );
+
+        // ---- Resolve using the documented priority chain. ----
+        const resolvedName = pickFirstNonEmptyString(
+          profileFullName,
+          profileDisplayName,
+          metaFullName,
+          metaDisplayName
+        );
+
+        if (!cancelled) {
+          setUserFullName(resolvedName !== '' ? resolvedName : null);
+          setAuthLoading(false);
         }
       } catch (err) {
         if (!cancelled) {
@@ -322,12 +386,15 @@ export default function CertificatePage() {
 
   // `allCoursesPassed` is true only when every required course has a real
   // capacity (> 0) and meets the pass threshold — see `buildCourseStatuses`.
+  // The `safeTotalMax > 0` guard inside `buildCourseStatuses` guarantees
+  // that a zero/undefined capacity can never be treated as "passed".
   const allCoursesPassed =
     courseStatuses.length === REQUIRED_COURSES.length &&
     passedCount === REQUIRED_COURSES.length;
 
   const isEligible = isPaymentApproved && allCoursesPassed;
 
+  // Final display name: profile-based name → email prefix → 'ተማሪ'.
   const displayName =
     userFullName || userEmail?.split('@')[0] || 'ተማሪ';
 
