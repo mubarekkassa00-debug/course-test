@@ -12,6 +12,11 @@ import {
   Phone,
   AlertCircle,
   Loader2,
+  Eye,
+  EyeOff,
+  GraduationCap,
+  BookOpen,
+  Library,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -96,6 +101,12 @@ export default function RegisterPage() {
   const [formState, setFormState] = useState<FormState>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  // -------------------------------------------------------------------------
+  // Password visibility toggles
+  // -------------------------------------------------------------------------
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // -------------------------------------------------------------------------
   // Validation
@@ -323,30 +334,39 @@ export default function RegisterPage() {
   // -------------------------------------------------------------------------
   if (formState === 'success') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-emerald-50 dark:from-slate-950 dark:to-slate-900 px-4 py-12">
-        <div className="w-full max-w-md">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl shadow-emerald-100/50 dark:shadow-slate-950/60 p-8 text-center border border-emerald-100 dark:border-slate-800">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20 mb-6">
-              <Mail className="h-8 w-8 text-emerald-600 dark:text-emerald-400" />
+      <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-slate-950 px-4 py-10 sm:px-6 lg:px-8">
+        {/* Ambient emerald glow */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 overflow-hidden"
+        >
+          <div className="absolute -top-40 -left-40 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl" />
+          <div className="absolute -bottom-40 -right-40 h-[32rem] w-[32rem] rounded-full bg-emerald-400/10 blur-3xl" />
+        </div>
+
+        <div className="relative w-full max-w-md px-4">
+          <div className="rounded-3xl border border-emerald-500/20 bg-slate-900/90 shadow-2xl shadow-emerald-950/40 backdrop-blur-md px-6 py-8 sm:px-8 sm:py-10 text-center">
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/15 border border-emerald-500/30">
+              <Mail className="h-8 w-8 text-emerald-400" />
             </div>
-            <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-3">
+            <h2 className="text-2xl font-bold text-white mb-3">
               ኢሜይልዎን ያረጋግጡ
             </h2>
-            <p className="text-slate-600 dark:text-slate-400 mb-2 leading-relaxed">
+            <p className="text-slate-400 mb-2 leading-relaxed text-sm">
               የማረጋገጫ ማስፈንጠሪያ ልከናል ወደ
             </p>
-            <p className="text-emerald-700 dark:text-emerald-400 font-semibold text-lg mb-6 break-all">
+            <p className="text-emerald-400 font-semibold text-base mb-6 break-all">
               {formData.email}
             </p>
-            <p className="text-slate-500 dark:text-slate-400 text-sm mb-8 leading-relaxed">
+            <p className="text-slate-400 text-sm mb-6 leading-relaxed">
               እባክዎ የገቢ መልእክት ሳጥንዎን ይመልከቱ እና መለያዎን ለማግበር
               የማረጋገጫ ማስፈንጠሪያውን ይጫኑ። ካላዩት የስፓም አቃፊዎን
               ያረጋግጡ።
             </p>
-            <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-xl p-4 mb-6">
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-950/30 p-4 mb-6">
               <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-amber-800 dark:text-amber-300 text-left">
+                <AlertCircle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-200 text-left leading-relaxed">
                   ኢሜይልዎን እስኪያረጋግጡ ድረስ መግባት አይችሉም።
                   የማረጋገጫ ማስፈንጠሪያው ከ24 ሰዓት በኋላ ያበቃል።
                 </p>
@@ -354,19 +374,19 @@ export default function RegisterPage() {
             </div>
             <Link
               href="/login"
-              className="inline-flex items-center justify-center w-full rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 transition-colors duration-200"
+              className="inline-flex w-full items-center justify-center rounded-2xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 active:scale-95 transition-all"
             >
               ወደ መግቢያ ይሂዱ
             </Link>
           </div>
-          <p className="mt-6 text-center text-sm text-slate-500 dark:text-slate-400">
+          <p className="mt-6 text-center text-sm text-slate-400">
             ኢሜይሉ አልደረሰዎትም?{' '}
             <button
               onClick={() => {
                 setFormState('idle');
                 setErrorMessage('');
               }}
-              className="font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 transition-colors duration-200"
+              className="font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
             >
               በሌላ ኢሜይል እንደገና ይሞክሩ
             </button>
@@ -380,43 +400,70 @@ export default function RegisterPage() {
   // Registration form
   // -------------------------------------------------------------------------
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-emerald-50 dark:from-slate-950 dark:to-slate-900 px-4 py-12">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-10">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600 shadow-lg shadow-emerald-200 dark:shadow-emerald-950/40 mb-5">
-            <svg
-              className="h-8 w-8 text-white"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"
-              />
-            </svg>
+    <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-slate-950 px-4 py-6 sm:py-10 sm:px-6 lg:px-8">
+      {/* Autofill override — keeps Chrome/Safari autofill from painting
+          the inputs a light cream/yellow that clashes with the dark UI. */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            input:-webkit-autofill,
+            input:-webkit-autofill:hover,
+            input:-webkit-autofill:focus,
+            input:-webkit-autofill:active {
+              -webkit-text-fill-color: #f1f5f9 !important;
+              -webkit-box-shadow: 0 0 0 1000px rgba(30, 41, 59, 0.6) inset !important;
+              box-shadow: 0 0 0 1000px rgba(30, 41, 59, 0.6) inset !important;
+              transition: background-color 9999s ease-in-out 0s !important;
+              caret-color: #f1f5f9 !important;
+            }
+          `,
+        }}
+      />
+
+      {/* Ambient emerald glow */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+      >
+        <div className="absolute -top-40 -left-40 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute -bottom-40 -right-40 h-[32rem] w-[32rem] rounded-full bg-emerald-400/10 blur-3xl" />
+        <div className="absolute top-1/3 left-1/2 h-[24rem] w-[24rem] -translate-x-1/2 rounded-full bg-emerald-600/5 blur-3xl" />
+      </div>
+
+      <div className="relative w-full max-w-md px-4">
+        <div className="rounded-3xl border border-emerald-500/20 bg-slate-900/90 shadow-2xl shadow-emerald-950/40 backdrop-blur-md px-5 py-6 sm:px-8 sm:py-9">
+          {/* -------------------- Header -------------------- */}
+          <div className="text-center mb-5 sm:mb-6">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/40">
+              <GraduationCap className="h-6 w-6 text-white" />
+            </div>
+            <h1 className="text-2xl font-extrabold text-white">
+              ባሲራ{' '}
+              <span className="font-light text-emerald-300/80">(Basira)</span>
+            </h1>
+            <p className="mt-1 text-[11px] sm:text-xs text-emerald-200/70 leading-relaxed">
+              ፕሪሚየም አካደሚ • የቁርኣን ማዕከል • ዲጂታል ቤተ-መጽሐፍት
+            </p>
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+
+          {/* Form heading */}
+          <h2 className="text-lg font-bold text-white mb-0.5 text-center">
             መለያ ይፍጠሩ
-          </h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-400 mb-5 text-center leading-relaxed">
             የመማር ጉዞዎን ዛሬ ይጀምሩ
           </p>
-        </div>
 
-        <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl shadow-emerald-100/50 dark:shadow-slate-950/60 p-8 border border-emerald-100 dark:border-slate-800">
-          {/* Google OAuth button */}
+          {/* -------------------- Google OAuth -------------------- */}
           <button
             type="button"
             onClick={handleGoogleSignUp}
             disabled={googleLoading || formState === 'loading'}
-            className="w-full flex items-center justify-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-6 py-3 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200"
+            className="w-full flex h-12 items-center justify-center gap-3 rounded-2xl border border-slate-700/60 bg-slate-800/40 px-6 text-sm font-semibold text-slate-200 hover:bg-slate-800/70 hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-0 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
           >
             {googleLoading ? (
               <>
-                <Loader2 className="animate-spin h-5 w-5 text-slate-500 dark:text-slate-300" />
+                <Loader2 className="animate-spin h-5 w-5 text-slate-400" />
                 በመገናኘት ላይ...
               </>
             ) : (
@@ -427,26 +474,34 @@ export default function RegisterPage() {
             )}
           </button>
 
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center" aria-hidden="true">
-              <div className="w-full border-t border-slate-200 dark:border-slate-700" />
+          {/* -------------------- Divider -------------------- */}
+          <div className="relative my-4 sm:my-5">
+            <div
+              className="absolute inset-0 flex items-center"
+              aria-hidden="true"
+            >
+              <div className="w-full border-t border-slate-800" />
             </div>
-            <div className="relative flex justify-center text-xs uppercase tracking-wide">
-              <span className="bg-white dark:bg-slate-900 px-3 text-slate-400 dark:text-slate-500">
+            <div className="relative flex justify-center">
+              <span className="bg-slate-900/90 px-3 text-xs text-slate-500">
                 ወይም
               </span>
             </div>
           </div>
 
+          {/* -------------------- Error banner -------------------- */}
           {errorMessage && (
-            <div className="mb-6 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
+            <div
+              role="alert"
+              className="mb-4 rounded-2xl border border-red-500/30 bg-red-950/40 px-3.5 py-3"
+            >
+              <div className="flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-red-800 dark:text-red-300">
+                  <p className="text-xs font-bold text-red-200">
                     ምዝገባው አልተሳካም
                   </p>
-                  <p className="mt-1 text-sm text-red-700 dark:text-red-300/90">
+                  <p className="mt-0.5 text-xs text-red-300/90 leading-relaxed">
                     {errorMessage}
                   </p>
                 </div>
@@ -454,18 +509,22 @@ export default function RegisterPage() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+          <form
+            onSubmit={handleSubmit}
+            className="space-y-3.5"
+            noValidate
+          >
             {/* Full Name */}
             <div>
               <label
                 htmlFor="fullName"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-slate-300 mb-1"
               >
                 ሙሉ ስም
               </label>
               <div className="relative">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                  <User className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+                  <User className="h-5 w-5 text-slate-500" />
                 </div>
                 <input
                   id="fullName"
@@ -475,15 +534,15 @@ export default function RegisterPage() {
                   value={formData.fullName}
                   onChange={handleChange('fullName')}
                   placeholder="ለምሳሌ፡ አህመድ አሊ"
-                  className={`block w-full rounded-xl border ${
+                  className={`block h-12 w-full rounded-2xl border bg-slate-800/60 pl-11 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
                     errors.fullName
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-200 dark:border-red-500/50 dark:focus:border-red-400 dark:focus:ring-red-500/20'
-                      : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-200 dark:border-slate-700 dark:focus:border-emerald-400 dark:focus:ring-emerald-500/20'
-                  } py-3 pl-11 pr-4 text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all duration-200 text-sm`}
+                      ? 'border-red-500/60 focus:ring-red-500 focus:border-red-500/60'
+                      : 'border-slate-700/50 focus:ring-emerald-500 focus:border-emerald-500/60'
+                  }`}
                 />
               </div>
               {errors.fullName && (
-                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                <p className="mt-1 text-xs text-red-400 flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {errors.fullName}
                 </p>
@@ -494,13 +553,13 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-slate-300 mb-1"
               >
                 ኢሜይል
               </label>
               <div className="relative">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                  <Mail className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+                  <Mail className="h-5 w-5 text-slate-500" />
                 </div>
                 <input
                   id="email"
@@ -510,32 +569,32 @@ export default function RegisterPage() {
                   value={formData.email}
                   onChange={handleChange('email')}
                   placeholder="example@gmail.com"
-                  className={`block w-full rounded-xl border ${
+                  className={`block h-12 w-full rounded-2xl border bg-slate-800/60 pl-11 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
                     errors.email
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-200 dark:border-red-500/50 dark:focus:border-red-400 dark:focus:ring-red-500/20'
-                      : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-200 dark:border-slate-700 dark:focus:border-emerald-400 dark:focus:ring-emerald-500/20'
-                  } py-3 pl-11 pr-4 text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all duration-200 text-sm`}
+                      ? 'border-red-500/60 focus:ring-red-500 focus:border-red-500/60'
+                      : 'border-slate-700/50 focus:ring-emerald-500 focus:border-emerald-500/60'
+                  }`}
                 />
               </div>
               {errors.email && (
-                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                <p className="mt-1 text-xs text-red-400 flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {errors.email}
                 </p>
               )}
             </div>
 
-            {/* Phone Number — NEW */}
+            {/* Phone Number */}
             <div>
               <label
                 htmlFor="phone"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-slate-300 mb-1"
               >
                 የስልክ ቁጥር
               </label>
               <div className="relative">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                  <Phone className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+                  <Phone className="h-5 w-5 text-slate-500" />
                 </div>
                 <input
                   id="phone"
@@ -546,15 +605,15 @@ export default function RegisterPage() {
                   value={formData.phone}
                   onChange={handleChange('phone')}
                   placeholder="ምሳሌ: 0911223344"
-                  className={`block w-full rounded-xl border ${
+                  className={`block h-12 w-full rounded-2xl border bg-slate-800/60 pl-11 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
                     errors.phone
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-200 dark:border-red-500/50 dark:focus:border-red-400 dark:focus:ring-red-500/20'
-                      : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-200 dark:border-slate-700 dark:focus:border-emerald-400 dark:focus:ring-emerald-500/20'
-                  } py-3 pl-11 pr-4 text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all duration-200 text-sm`}
+                      ? 'border-red-500/60 focus:ring-red-500 focus:border-red-500/60'
+                      : 'border-slate-700/50 focus:ring-emerald-500 focus:border-emerald-500/60'
+                  }`}
                 />
               </div>
               {errors.phone && (
-                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                <p className="mt-1 text-xs text-red-400 flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {errors.phone}
                 </p>
@@ -565,31 +624,45 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-slate-300 mb-1"
               >
                 የይለፍ ቃል
               </label>
               <div className="relative">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                  <Lock className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+                  <Lock className="h-5 w-5 text-slate-500" />
                 </div>
                 <input
                   id="password"
                   name="password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   autoComplete="new-password"
                   value={formData.password}
                   onChange={handleChange('password')}
                   placeholder="ቢያንስ 6 ቁምፊዎች"
-                  className={`block w-full rounded-xl border ${
+                  className={`block h-12 w-full rounded-2xl border bg-slate-800/60 pl-11 pr-12 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
                     errors.password
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-200 dark:border-red-500/50 dark:focus:border-red-400 dark:focus:ring-red-500/20'
-                      : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-200 dark:border-slate-700 dark:focus:border-emerald-400 dark:focus:ring-emerald-500/20'
-                  } py-3 pl-11 pr-4 text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all duration-200 text-sm`}
+                      ? 'border-red-500/60 focus:ring-red-500 focus:border-red-500/60'
+                      : 'border-slate-700/50 focus:ring-emerald-500 focus:border-emerald-500/60'
+                  }`}
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={
+                    showPassword ? 'Hide password' : 'Show password'
+                  }
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500 hover:text-emerald-300 transition-colors"
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-5 w-5" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                </button>
               </div>
               {errors.password && (
-                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                <p className="mt-1 text-xs text-red-400 flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {errors.password}
                 </p>
@@ -600,45 +673,62 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="confirmPassword"
-                className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5"
+                className="block text-xs font-medium text-slate-300 mb-1"
               >
                 የይለፍ ቃል ያረጋግጡ
               </label>
               <div className="relative">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5">
-                  <Lock className="h-5 w-5 text-slate-400 dark:text-slate-500" />
+                  <Lock className="h-5 w-5 text-slate-500" />
                 </div>
                 <input
                   id="confirmPassword"
                   name="confirmPassword"
-                  type="password"
+                  type={showConfirmPassword ? 'text' : 'password'}
                   autoComplete="new-password"
                   value={formData.confirmPassword}
                   onChange={handleChange('confirmPassword')}
                   placeholder="የይለፍ ቃሉን ድጋሚ ያስገቡ"
-                  className={`block w-full rounded-xl border ${
+                  className={`block h-12 w-full rounded-2xl border bg-slate-800/60 pl-11 pr-12 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
                     errors.confirmPassword
-                      ? 'border-red-300 focus:border-red-500 focus:ring-red-200 dark:border-red-500/50 dark:focus:border-red-400 dark:focus:ring-red-500/20'
-                      : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-200 dark:border-slate-700 dark:focus:border-emerald-400 dark:focus:ring-emerald-500/20'
-                  } py-3 pl-11 pr-4 text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-800 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all duration-200 text-sm`}
+                      ? 'border-red-500/60 focus:ring-red-500 focus:border-red-500/60'
+                      : 'border-slate-700/50 focus:ring-emerald-500 focus:border-emerald-500/60'
+                  }`}
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  aria-label={
+                    showConfirmPassword
+                      ? 'Hide password'
+                      : 'Show password'
+                  }
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500 hover:text-emerald-300 transition-colors"
+                >
+                  {showConfirmPassword ? (
+                    <EyeOff className="h-5 w-5" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                </button>
               </div>
               {errors.confirmPassword && (
-                <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+                <p className="mt-1 text-xs text-red-400 flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                   {errors.confirmPassword}
                 </p>
               )}
             </div>
 
+            {/* Submit */}
             <button
               type="submit"
               disabled={formState === 'loading' || googleLoading}
-              className="w-full flex items-center justify-center rounded-xl bg-emerald-600 px-6 py-3.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200"
+              className="w-full flex h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 text-sm font-bold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 active:scale-95 transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 mt-1"
             >
               {formState === 'loading' ? (
                 <>
-                  <Loader2 className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" />
+                  <Loader2 className="h-5 w-5 animate-spin" />
                   በመመዝገብ ላይ...
                 </>
               ) : (
@@ -646,16 +736,34 @@ export default function RegisterPage() {
               )}
             </button>
           </form>
+
+          {/* -------------------- Login link -------------------- */}
+          <p className="mt-5 text-center text-sm text-slate-400">
+            ቀደም ሲል መለያ አለዎት?{' '}
+            <Link
+              href="/login"
+              className="font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+            >
+              ይግቡ
+            </Link>
+          </p>
         </div>
 
-        <p className="mt-8 text-center text-sm text-slate-500 dark:text-slate-400">
-          ቀደም ሲል መለያ አለዎት?{' '}
-          <Link
-            href="/login"
-            className="font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 transition-colors duration-200"
-          >
-            ይግቡ
-          </Link>
+        {/* -------------------- Sub-card footer -------------------- */}
+        <div className="mt-5 flex items-center justify-center gap-4 text-[11px] text-slate-500">
+          <span className="inline-flex items-center gap-1.5">
+            <BookOpen className="h-3.5 w-3.5 text-emerald-500/70" />
+            የቁርኣን ማዕከል
+          </span>
+          <span className="h-1 w-1 rounded-full bg-slate-700" />
+          <span className="inline-flex items-center gap-1.5">
+            <Library className="h-3.5 w-3.5 text-emerald-500/70" />
+            ዲጂታል ቤተ-መጽሐፍት
+          </span>
+        </div>
+
+        <p className="mt-4 text-center text-[11px] text-slate-600">
+          © {new Date().getFullYear()} ባሲራ · Basira
         </p>
       </div>
     </div>

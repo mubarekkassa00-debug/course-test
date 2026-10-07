@@ -1,7 +1,7 @@
 // app/login/page.tsx
 'use client';
 
-import { useState, useCallback, FormEvent, useMemo } from 'react';
+import { useState, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import {
@@ -201,183 +201,217 @@ export default function LoginPage() {
   const togglePasswordVisibility = () => setShowPassword((prev) => !prev);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 to-slate-200 p-4 sm:p-6 lg:p-8">
-      <div className="w-full max-w-5xl bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div className="grid grid-cols-1 lg:grid-cols-2">
-          {/* Left panel – Branding (hidden on mobile) */}
-          <div className="relative hidden lg:flex flex-col justify-center bg-gradient-to-br from-emerald-700 to-emerald-900 text-white p-10 lg:p-12">
-            <div className="mb-8">
-              <h1 className="text-4xl font-extrabold tracking-tight">
-                በሲራ <span className="font-light">(Basira)</span>
-              </h1>
-              <p className="mt-4 text-emerald-100 text-lg leading-relaxed">
-                የእርስዎ የተቀናጀ የእውቀት እና የትምህርት ማዕከል
-              </p>
-            </div>
+    <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-slate-950 px-4 py-10 sm:px-6 lg:px-8">
+      {/* ================================================================= */}
+      {/* AMBIENT EMERALD GLOW BACKGROUND                                  */}
+      {/* Subtle, cinematic lighting that sits behind everything.          */}
+      {/* ================================================================= */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+      >
+        <div className="absolute -top-40 -left-40 h-[32rem] w-[32rem] rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute -bottom-40 -right-40 h-[32rem] w-[32rem] rounded-full bg-emerald-400/10 blur-3xl" />
+        <div className="absolute top-1/3 left-1/2 h-[24rem] w-[24rem] -translate-x-1/2 rounded-full bg-emerald-600/5 blur-3xl" />
+      </div>
 
-            <div className="space-y-5 mt-4">
-              <div className="flex items-center gap-3">
-                <GraduationCap className="h-6 w-6 text-emerald-200" />
-                <span className="text-lg font-medium">Premium Academy</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <BookOpen className="h-6 w-6 text-emerald-200" />
-                <span className="text-lg font-medium">Quran Center</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <Library className="h-6 w-6 text-emerald-200" />
-                <span className="text-lg font-medium">Digital Library</span>
-              </div>
+      {/* ================================================================= */}
+      {/* GLASS CARD                                                        */}
+      {/* ================================================================= */}
+      <div className="relative w-full max-w-md px-4">
+        <div className="rounded-3xl border border-emerald-500/20 bg-slate-900/90 shadow-2xl shadow-emerald-950/40 backdrop-blur-md px-6 py-8 sm:px-8 sm:py-10">
+          {/* -------------------- Header -------------------- */}
+          <div className="text-center mb-8">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/40">
+              <GraduationCap className="h-7 w-7 text-white" />
             </div>
+            <h1 className="text-2xl font-extrabold text-white">
+              ባሲራ{' '}
+              <span className="font-light text-emerald-300/80">
+                (Basira)
+              </span>
+            </h1>
+            <p className="mt-2 text-xs sm:text-sm text-emerald-200/70 leading-relaxed">
+              ፕሪሚየም አካደሚ • የቁርኣን ማዕከል • ዲጂታል ቤተ-መጽሐፍት
+            </p>
+          </div>
 
-            <div className="mt-10 text-emerald-200 text-sm opacity-80">
-              © {new Date().getFullYear()} Basira. All rights reserved.
+          {/* -------------------- Form heading -------------------- */}
+          <h2 className="text-xl font-bold text-white mb-1">
+            ወደ መለያዎ ይግቡ
+          </h2>
+          <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+            ለመቀጠል የእርስዎን ኢሜይል እና የይለፍ ቃል ያስገቡ
+          </p>
+
+          {/* -------------------- Error alert -------------------- */}
+          {errorMessage && (
+            <div
+              role="alert"
+              className="mb-5 flex items-start gap-2 rounded-2xl border border-red-500/30 bg-red-950/40 px-3.5 py-3 text-sm text-red-200"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
+              <span className="leading-relaxed">{errorMessage}</span>
+            </div>
+          )}
+
+          {/* -------------------- Google OAuth -------------------- */}
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            disabled={googleLoading || isLoading}
+            className="w-full flex h-12 items-center justify-center gap-3 rounded-2xl border border-slate-700/60 bg-slate-800/40 px-6 text-sm font-semibold text-slate-200 hover:bg-slate-800/70 hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-0 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+          >
+            {googleLoading ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+                በመገናኘት ላይ...
+              </>
+            ) : (
+              <>
+                <GoogleIcon className="h-5 w-5" />
+                በ Google ይቀጥሉ
+              </>
+            )}
+          </button>
+
+          {/* -------------------- Divider -------------------- */}
+          <div className="relative my-6">
+            <div
+              className="absolute inset-0 flex items-center"
+              aria-hidden="true"
+            >
+              <div className="w-full border-t border-slate-800" />
+            </div>
+            <div className="relative flex justify-center">
+              <span className="bg-slate-900/90 px-3 text-xs text-slate-500">
+                ወይም
+              </span>
             </div>
           </div>
 
-          {/* Right panel – Login form */}
-          <div className="p-8 sm:p-10 lg:p-12 flex flex-col justify-center">
-            {/* Mobile branding (visible only on small screens) */}
-            <div className="lg:hidden text-center mb-8">
-              <h1 className="text-3xl font-extrabold text-emerald-800">
-                በሲራ <span className="font-light text-slate-600">(Basira)</span>
-              </h1>
-              <p className="mt-2 text-slate-500 text-sm">
-                Premium Academy • Quran Center • Digital Library
-              </p>
+          <form onSubmit={handleLogin} className="space-y-5">
+            {/* -------------------- Email -------------------- */}
+            <div>
+              <label
+                htmlFor="email"
+                className="block text-sm font-medium text-slate-300 mb-1.5"
+              >
+                ኢሜይል አድራሻ
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                  <Mail className="h-5 w-5 text-slate-500" />
+                </div>
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  autoComplete="email"
+                  className="block h-12 w-full rounded-2xl border border-slate-700/50 bg-slate-800/60 pl-11 pr-4 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500/60 transition-all"
+                  disabled={isLoading || googleLoading}
+                />
+              </div>
             </div>
 
-            <h2 className="text-2xl font-bold text-slate-800 mb-2">ወደ መለያዎ ይግቡ</h2>
-            <p className="text-slate-500 text-sm mb-6">
-              ለመቀጠል የእርስዎን ኢሜይል እና የይለፍ ቃል ያስገቡ
-            </p>
-
-            {/* Error alert */}
-            {errorMessage && (
-              <div className="mb-6 flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
-                <AlertCircle className="h-5 w-5 flex-shrink-0" />
-                <span>{errorMessage}</span>
+            {/* -------------------- Password -------------------- */}
+            <div>
+              <label
+                htmlFor="password"
+                className="block text-sm font-medium text-slate-300 mb-1.5"
+              >
+                የይለፍ ቃል
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                  <Lock className="h-5 w-5 text-slate-500" />
+                </div>
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  className="block h-12 w-full rounded-2xl border border-slate-700/50 bg-slate-800/60 pl-11 pr-12 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500/60 transition-all"
+                  disabled={isLoading || googleLoading}
+                />
+                <button
+                  type="button"
+                  onClick={togglePasswordVisibility}
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-500 hover:text-emerald-300 focus:outline-none transition-colors"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  disabled={isLoading || googleLoading}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-5 w-5" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                </button>
               </div>
-            )}
 
-            {/* Google OAuth button */}
+              {/* Forgot password link */}
+              <div className="mt-2 text-right">
+                <a
+                  href="/auth/reset-password"
+                  className="text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
+                >
+                  የይለፍ ቃል ረስተዋል?
+                </a>
+              </div>
+            </div>
+
+            {/* -------------------- Primary CTA -------------------- */}
             <button
-              type="button"
-              onClick={handleGoogleLogin}
-              disabled={googleLoading || isLoading}
-              className="w-full flex items-center justify-center gap-3 rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+              type="submit"
+              disabled={isLoading || googleLoading}
+              className="w-full flex h-12 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 text-sm font-bold text-white shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 active:scale-95 transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
             >
-              {googleLoading ? (
+              {isLoading ? (
                 <>
-                  <Loader2 className="animate-spin h-5 w-5 text-slate-500" />
-                  በመገናኘት ላይ...
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  በመግባት ላይ...
                 </>
               ) : (
                 <>
-                  <GoogleIcon className="h-5 w-5" />
-                  በ Google ይቀጥሉ
+                  <LogIn className="h-5 w-5" />
+                  ይግቡ
                 </>
               )}
             </button>
+          </form>
 
-            {/* Divider */}
-            <div className="relative my-6">
-              <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                <div className="w-full border-t border-slate-200" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase tracking-wide">
-                <span className="bg-white px-3 text-slate-400">ወይም</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleLogin} className="space-y-5">
-              {/* Email */}
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
-                  ኢሜይል አድራሻ
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Mail className="h-5 w-5 text-slate-400" />
-                  </div>
-                  <input
-                    id="email"
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@example.com"
-                    className="block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
-                    disabled={isLoading || googleLoading}
-                  />
-                </div>
-              </div>
-
-              {/* Password */}
-              <div>
-                <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1.5">
-                  የይለፍ ቃል
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Lock className="h-5 w-5 text-slate-400" />
-                  </div>
-                  <input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="block w-full pl-10 pr-12 py-3 border border-slate-300 rounded-lg text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
-                    disabled={isLoading || googleLoading}
-                  />
-                  <button
-                    type="button"
-                    onClick={togglePasswordVisibility}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    disabled={isLoading || googleLoading}
-                  >
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" />
-                    ) : (
-                      <Eye className="h-5 w-5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Submit */}
-              <button
-                type="submit"
-                disabled={isLoading || googleLoading}
-                className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    በመግባት ላይ...
-                  </>
-                ) : (
-                  <>
-                    <LogIn className="h-5 w-5" />
-                    ይግቡ
-                  </>
-                )}
-              </button>
-            </form>
-
-            {/* Register link */}
-            <p className="mt-6 text-center text-sm text-slate-500">
-              መለያ የሎትም?{' '}
-              <a
-                href="/register"
-                className="font-semibold text-emerald-600 hover:text-emerald-500 transition-colors"
-              >
-                አዲስ መለያ ይፍጠሩ
-              </a>
-            </p>
-          </div>
+          {/* -------------------- Register link -------------------- */}
+          <p className="mt-6 text-center text-sm text-slate-400">
+            መለያ የለዎትም?{' '}
+            <a
+              href="/register"
+              className="font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+            >
+              አዲስ መለያ ይፍጠሩ
+            </a>
+          </p>
         </div>
+
+        {/* -------------------- Sub-card footer -------------------- */}
+        <div className="mt-6 flex items-center justify-center gap-4 text-[11px] text-slate-500">
+          <span className="inline-flex items-center gap-1.5">
+            <BookOpen className="h-3.5 w-3.5 text-emerald-500/70" />
+            የቁርኣን ማዕከል
+          </span>
+          <span className="h-1 w-1 rounded-full bg-slate-700" />
+          <span className="inline-flex items-center gap-1.5">
+            <Library className="h-3.5 w-3.5 text-emerald-500/70" />
+            ዲጂታል ቤተ-መጽሐፍት
+          </span>
+        </div>
+
+        <p className="mt-6 text-center text-[11px] text-slate-600">
+          © {new Date().getFullYear()} ባሲራ · Basira
+        </p>
       </div>
     </div>
   );
