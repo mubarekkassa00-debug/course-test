@@ -484,6 +484,25 @@ const courses: Record<number, Course> = {
 export default function CoursePage() {
   const params = useParams();
 
+  // =========================================================================
+  // TESTING TOGGLE — UNLOCK ALL LESSONS
+  //
+  //   `true`  → bypasses the daily drip-lock AND the payment gate for the
+  //             entire course. Every lesson and the final exam become
+  //             immediately reachable. The existing `completed` /
+  //             `passed` badges still render exactly as before (they are
+  //             driven by the real `quiz_results` rows).
+  //
+  //   `false` → restores the original production behavior 100%:
+  //               • Lessons unlock one-per-day after the previous lesson
+  //                 is passed.
+  //               • Lessons 4+ require an `approved` payment.
+  //               • The final exam requires every lesson to be passed.
+  //
+  // Flip this to `false` to ship for production.
+  // =========================================================================
+  const UNLOCK_ALL_LESSONS = true; // Set to false to restore daily locked lessons
+
   // -------------------------------------------------------------------------
   // DARK MODE SYNC (globally-scoped on <html>)
   //
@@ -852,6 +871,7 @@ export default function CoursePage() {
   // Given a lesson's 0-based index within `course.lessons`, returns whether
   // it is locked and, if so, the reason:
   //
+  //   • UNLOCK_ALL_LESSONS === true    → always UNLOCKED (testing bypass)
   //   • index === 0                    → always UNLOCKED
   //   • previous lesson not yet passed → LOCKED ("complete previous lesson")
   //   • previous lesson passed TODAY   → LOCKED ("come back tomorrow")
@@ -864,6 +884,13 @@ export default function CoursePage() {
   const resolveLock = (
     index: number
   ): { locked: boolean; reason: 'previous' | 'tomorrow' | null } => {
+    // -----------------------------------------------------------------
+    // TESTING BYPASS — when UNLOCK_ALL_LESSONS is true, no lesson is
+    // ever drip-locked. Restore production behavior by setting the flag
+    // to `false` at the top of the component.
+    // -----------------------------------------------------------------
+    if (UNLOCK_ALL_LESSONS) return { locked: false, reason: null };
+
     if (scoresLoading) return { locked: false, reason: null };
     if (index <= 0) return { locked: false, reason: null };
 
@@ -893,10 +920,11 @@ export default function CoursePage() {
   // DRIP-LOCK RESOLVER (FINAL EXAM)
   //
   // Precedence of checks:
-  //   1. Every regular lesson must have a passing record. If even one is
+  //   1. UNLOCK_ALL_LESSONS === true  → UNLOCKED (testing bypass)
+  //   2. Every regular lesson must have a passing record. If even one is
   //      missing (never passed), the final exam is LOCKED with reason
   //      'allLessons' → "እባክዎን አስቀድመው ሁሉንም ደርሶች ያጠናቅቁ".
-  //   2. If all lessons are passed, check the LAST lesson's earliest pass
+  //   3. If all lessons are passed, check the LAST lesson's earliest pass
   //      date:
   //        • passed TODAY (same calendar day) → LOCKED, reason 'tomorrow'
   //          → "ነገ ይከፈታል (በቀን አንድ ደርስ/ፈተና ብቻ)"
@@ -909,6 +937,13 @@ export default function CoursePage() {
     locked: boolean;
     reason: 'allLessons' | 'tomorrow' | null;
   } => {
+    // -----------------------------------------------------------------
+    // TESTING BYPASS — when UNLOCK_ALL_LESSONS is true, the final exam
+    // is never locked. Restore production behavior by setting the flag
+    // to `false` at the top of the component.
+    // -----------------------------------------------------------------
+    if (UNLOCK_ALL_LESSONS) return { locked: false, reason: null };
+
     if (scoresLoading) return { locked: false, reason: null };
 
     const lessons = course.lessons;
@@ -1117,6 +1152,9 @@ export default function CoursePage() {
               // `idx` matches the lesson's 0-based index within
               // `course.lessons` because lessons are pushed first, in
               // order, into `timelineItems`.
+              //
+              // When UNLOCK_ALL_LESSONS is true, `resolveLock` always
+              // returns `{ locked: false }`, so `dripLocked` is false.
               // ---------------------------------------------------------
               const lock = resolveLock(idx);
               const dripLocked = lock.locked;
@@ -1130,11 +1168,15 @@ export default function CoursePage() {
               //   Lessons 1–3  → part of the 3-day free trial.
               //   Lessons 4+   → require an approved payment.
               //
+              // When UNLOCK_ALL_LESSONS is true, the payment gate is
+              // bypassed entirely so lessons 4+ remain reachable.
+              //
               // While `paymentLoading` is true we treat the user as
               // "not payment-locked" so trial users don't briefly see a
               // lock flash before the payment check resolves.
               // ---------------------------------------------------------
               const requiresPayment =
+                !UNLOCK_ALL_LESSONS &&
                 !paymentLoading &&
                 !isPaid &&
                 lessonNumber > FREE_TRIAL_LESSON_COUNT;
@@ -1151,6 +1193,10 @@ export default function CoursePage() {
               //   2. Any future-day (locked) lesson → "⏳ ነገ ይከፈታል"
               //   3. Lessons 4+ unpaid + arrived    → "🔒 ክፍያ ይፈልጋል"
               //   4. Paid + unlocked lesson         → "▶️ አጫውት"
+              //
+              // When UNLOCK_ALL_LESSONS is true, dripLocked and
+              // paymentLocked are both false, so the badge falls through
+              // to the free-trial / paid labels as appropriate.
               // ---------------------------------------------------------
               let badge: { label: string; className: string } | null = null;
 
@@ -1173,7 +1219,9 @@ export default function CoursePage() {
                   className:
                     'bg-emerald-100 text-emerald-700 border-emerald-200/80 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30',
                 };
-              } else if (isPaid) {
+              } else if (isPaid || UNLOCK_ALL_LESSONS) {
+                // When UNLOCK_ALL_LESSONS is true, treat every unlocked
+                // lesson beyond the trial window as playable.
                 badge = {
                   label: amh.badgePlay,
                   className:
@@ -1227,7 +1275,7 @@ export default function CoursePage() {
                         {lesson.title}
                       </p>
 
-                      {/* NEW — status badge (free trial / tomorrow / payment) */}
+                      {/* Status badge (free trial / tomorrow / payment) */}
                       {badge && (
                         <span
                           className={[
@@ -1321,6 +1369,7 @@ export default function CoursePage() {
             // and slicing to MAX_FINAL_EXAM_QUESTIONS.
             //
             // DRIP-LOCK (final exam):
+            //   • UNLOCK_ALL_LESSONS === true → always UNLOCKED
             //   • Not all regular lessons passed → LOCKED ('allLessons')
             //   • All passed but last passed today → LOCKED ('tomorrow')
             //   • All passed and last passed earlier → UNLOCKED

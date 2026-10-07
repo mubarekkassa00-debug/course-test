@@ -1114,6 +1114,23 @@ function normalizeQuestion(item: any): NormalizedQuestion {
 export default function LessonPage() {
   const params = useParams();
 
+  // =========================================================================
+  // TESTING TOGGLE — UNLOCK ALL LESSONS
+  //
+  //   `true`  → bypasses the payment gate AND the audio-finish gate AND the
+  //             post-pass retake lock, so every lesson's content and quiz
+  //             become immediately reachable for testing. Real scores are
+  //             still read from `quiz_results` and shown in the header badge.
+  //
+  //   `false` → restores the original production behavior 100%:
+  //               • Lessons 4+ require an `approved` payment.
+  //               • The quiz tab unlocks only after the audio finishes.
+  //               • A passed quiz can no longer be retaken.
+  //
+  // Flip this to `false` to ship for production.
+  // =========================================================================
+  const UNLOCK_ALL_LESSONS = true; // Set to false to restore original lesson lock
+
   // ------------------------------------------------------------------
   // PARAM RESOLUTION (client component → useParams, synchronous)
   // ------------------------------------------------------------------
@@ -1222,10 +1239,17 @@ export default function LessonPage() {
   //                     submit button must not be shown.
   //   hasFailedBefore → the student previously scored < 50%. The quiz
   //                     stays fully unlocked so they can retake it.
+  //
+  // When UNLOCK_ALL_LESSONS is true, `hasPassedBefore` is forced to
+  // `false` so a passed quiz can be retaken during testing.
   // ------------------------------------------------------------------
-  const hasPassedBefore =
+  const realHasPassedBefore =
     savedScore !== null &&
     savedScore.percentage >= PASS_THRESHOLD_PERCENT;
+
+  const hasPassedBefore = UNLOCK_ALL_LESSONS
+    ? false
+    : realHasPassedBefore;
 
   const hasFailedBefore =
     savedScore !== null &&
@@ -1326,15 +1350,22 @@ export default function LessonPage() {
   //
   // While `paymentLoading` is true we return false so trial/paid users
   // never briefly see the payment modal before the check resolves.
+  //
+  // When UNLOCK_ALL_LESSONS is true, the payment gate is bypassed
+  // entirely so lessons 4+ and the final exam are immediately accessible.
   // ------------------------------------------------------------------
   const localLessonNumber = lesson ? getLocalLessonNumber(lesson.lessonNumber) : null;
 
-  const requiresPayment =
+  const realRequiresPayment =
     !paymentLoading &&
     !isPaid &&
     (isFinalExam ||
       (localLessonNumber !== null &&
         localLessonNumber > FREE_TRIAL_LESSON_COUNT));
+
+  const requiresPayment = UNLOCK_ALL_LESSONS
+    ? false
+    : realRequiresPayment;
 
   // Auto-open the payment modal whenever the student lands on a
   // payment-required lesson. Auto-close it if the requirement is
@@ -1708,6 +1739,9 @@ export default function LessonPage() {
   //
   // PAYMENT GATE — if the current lesson requires payment, the quiz
   // is not reachable; we surface the modal instead.
+  //
+  // When UNLOCK_ALL_LESSONS is true, the audio-finish requirement is
+  // treated as satisfied so the quiz is reachable immediately.
   // ------------------------------------------------------------------
   const goToQuiz = () => {
     if (!lesson) return;
@@ -1715,8 +1749,9 @@ export default function LessonPage() {
       setShowPaymentModal(true);
       return;
     }
-    // If the lesson has audio, keep the strict audio-finish gate.
-    if (lesson.audioUrl && !isAudioFinished) return;
+    // If the lesson has audio, keep the strict audio-finish gate
+    // (bypassed when UNLOCK_ALL_LESSONS is true).
+    if (lesson.audioUrl && !isAudioFinished && !UNLOCK_ALL_LESSONS) return;
     setIsAudioFinished(true);
     setIsQuizUnlocked(true);
     setActiveTab('quiz');
@@ -1778,6 +1813,11 @@ export default function LessonPage() {
   const quizAvailable = questions.length > 0;
   const totalImages = lesson.images.length;
 
+  // Computed audio/quiz gate state used by the UI. When
+  // UNLOCK_ALL_LESSONS is true, both gates are treated as open.
+  const uiAudioFinished = UNLOCK_ALL_LESSONS ? true : isAudioFinished;
+  const uiQuizUnlocked = UNLOCK_ALL_LESSONS ? true : isQuizUnlocked;
+
   return (
     <div className="h-screen max-h-[100dvh] flex flex-col overflow-hidden bg-slate-950 text-slate-100">
       {/* Header */}
@@ -1826,7 +1866,7 @@ export default function LessonPage() {
               <div
                 className={[
                   'mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-medium',
-                  hasPassedBefore
+                  realHasPassedBefore
                     ? 'bg-emerald-950 border-emerald-800 text-emerald-300'
                     : 'bg-amber-950 border-amber-800 text-amber-300',
                 ].join(' ')}
@@ -2016,29 +2056,31 @@ export default function LessonPage() {
                   </div>
                 )}
 
-                {/* Start Quiz button — gated by isAudioFinished (or absence of audio) */}
+                {/* Start Quiz button — gated by isAudioFinished (or absence
+                    of audio). When UNLOCK_ALL_LESSONS is true, the audio
+                    gate is treated as satisfied via `uiAudioFinished`. */}
                 {!loadingQuiz &&
                   quizAvailable &&
-                  (isAudioFinished || !lesson.audioUrl) && (
+                  (uiAudioFinished || !lesson.audioUrl) && (
                     <button
                       type="button"
                       onClick={goToQuiz}
                       className={[
                         'w-full py-3 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg',
-                        hasPassedBefore
+                        realHasPassedBefore
                           ? 'bg-emerald-700 active:bg-emerald-800'
                           : 'bg-emerald-600 active:bg-emerald-700',
                       ].join(' ')}
                     >
                       <BookOpen className="h-5 w-5" />
-                      {hasPassedBefore ? 'ውጤትህን ተመልከት' : 'ፈተናውን ጀምር'}
+                      {realHasPassedBefore ? 'ውጤትህን ተመልከት' : 'ፈተናውን ጀምር'}
                     </button>
                   )}
 
                 {!loadingQuiz &&
                   quizAvailable &&
                   lesson.audioUrl &&
-                  !isAudioFinished && (
+                  !uiAudioFinished && (
                     <p className="text-xs text-slate-500 text-center">
                       ፈተናውን ለመጀመር ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
                     </p>
@@ -2058,7 +2100,7 @@ export default function LessonPage() {
             <ArrowLeft className="h-4 w-4" /> ወደ ደርሱ ተመለስ
           </button>
 
-          {!isQuizUnlocked ? (
+          {!uiQuizUnlocked ? (
             <div className="flex-1 flex items-center justify-center">
               <p className="text-slate-400 text-center px-6">
                 ፈተናውን ለመውሰድ እባክዎ ኦዲዮውን እስከ መጨረሻው ያዳምጡ።
@@ -2098,6 +2140,9 @@ export default function LessonPage() {
                   PASSED LOCK — student already cleared 50%
                   → show a green badge, block the quiz entirely,
                     keep navigation buttons active.
+
+                  When UNLOCK_ALL_LESSONS is true, `hasPassedBefore`
+                  is forced to `false` so this branch never triggers.
                  ------------------------------------------------ */}
               {hasPassedBefore && !quizSubmitted ? (
                 <div className="mt-4 flex-1 flex flex-col items-center justify-center text-center gap-4">
@@ -2302,6 +2347,9 @@ export default function LessonPage() {
       {/* Rendered when an unpaid student opens a lesson beyond the      */}
       {/* free-trial window (lesson 4+ or the final exam). Auto-opened   */}
       {/* on mount and dismissible via the X button or the backdrop.     */}
+      {/*                                                                 */}
+      {/* When UNLOCK_ALL_LESSONS is true, `requiresPayment` is false    */}
+      {/* so this modal never auto-opens.                                 */}
       {/* =============================================================== */}
       {showPaymentModal && (
         <div
