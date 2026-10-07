@@ -63,6 +63,39 @@ interface CourseStatusEntry {
   passed: boolean;
 }
 
+/**
+ * TEMPORARY DEBUG — shape of the diagnostic panel state.
+ * Remove this interface together with the `debugInfo` state and the
+ * rendered debug box below once the investigation is complete.
+ */
+interface CertificateDebugInfo {
+  userId: string | null;
+  authEmail: string | null;
+  authMetadataName: string | null;
+  profileFullName: string | null;
+  profileDisplayName: string | null;
+  profileQuery: {
+    attemptedColumns: string;
+    returnedRow: boolean;
+    rawProfileObject: any;
+    error: string | null;
+  };
+  rawQuizResults: {
+    count: number;
+    rows: any[];
+    error: string | null;
+  };
+  earnedScore: number;
+  totalMaxScore: number;
+  totalMaxScoreBreakdown: {
+    courseCapacities: Record<string, number>;
+    defaultCapacity: number;
+    sumUsedInCalculation: number;
+  };
+  readingProgressCount: number;
+  readingProgressError: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -172,6 +205,39 @@ export default function CertificatePage() {
   const [certSuccess, setCertSuccess] = useState<string | null>(null);
 
   // -------------------------------------------------------------------------
+  // TEMPORARY DEBUG — on-screen diagnostic panel.
+  // Populated by the auth guard + data-fetch effects below.
+  // Remove this block together with the debug UI box further down.
+  // -------------------------------------------------------------------------
+  const [debugInfo, setDebugInfo] = useState<CertificateDebugInfo>({
+    userId: null,
+    authEmail: null,
+    authMetadataName: null,
+    profileFullName: null,
+    profileDisplayName: null,
+    profileQuery: {
+      attemptedColumns: 'full_name, display_name',
+      returnedRow: false,
+      rawProfileObject: null,
+      error: null,
+    },
+    rawQuizResults: {
+      count: 0,
+      rows: [],
+      error: null,
+    },
+    earnedScore: 0,
+    totalMaxScore: 0,
+    totalMaxScoreBreakdown: {
+      courseCapacities: { ...COURSE_CAPACITY },
+      defaultCapacity: DEFAULT_COURSE_CAPACITY,
+      sumUsedInCalculation: 0,
+    },
+    readingProgressCount: 0,
+    readingProgressError: null,
+  });
+
+  // -------------------------------------------------------------------------
   // Dark-mode sync — mirrors the dashboard so this standalone page renders
   // correctly when opened directly.
   // -------------------------------------------------------------------------
@@ -221,6 +287,9 @@ export default function CertificatePage() {
         // ---- 1 & 2. Query the profiles table FIRST (source of truth). ----
         let profileFullName = '';
         let profileDisplayName = '';
+        let profileError: string | null = null;
+        let profileReturnedRow = false;
+        let rawProfileObject: any = null;
 
         try {
           // Try both `full_name` and `display_name` in a single query so we
@@ -233,11 +302,14 @@ export default function CertificatePage() {
 
           if (profileErr) {
             // Non-fatal: fall through to metadata / email.
+            profileError = profileErr.message;
             console.warn(
               '[Certificate] profiles lookup warning:',
               profileErr.message
             );
           } else if (profile) {
+            profileReturnedRow = true;
+            rawProfileObject = profile;
             profileFullName = pickFirstNonEmptyString(
               (profile as any).full_name
             );
@@ -248,17 +320,24 @@ export default function CertificatePage() {
         } catch (profileCatch) {
           // If the schema doesn't expose `display_name`, retry with just
           // `full_name` so we still get a value when possible.
+          profileError = readErrorMessage(profileCatch);
           try {
             const { data: fallbackProfile } = await supabase
               .from('profiles')
               .select('full_name')
               .eq('id', user.id)
               .maybeSingle();
-            profileFullName = pickFirstNonEmptyString(
-              (fallbackProfile as any)?.full_name
-            );
-          } catch {
-            /* silent — cosmetic only */
+            if (fallbackProfile) {
+              profileReturnedRow = true;
+              rawProfileObject = fallbackProfile;
+              profileFullName = pickFirstNonEmptyString(
+                (fallbackProfile as any)?.full_name
+              );
+            }
+          } catch (fallbackCatch) {
+            profileError =
+              profileError ||
+              readErrorMessage(fallbackCatch);
           }
         }
 
@@ -269,6 +348,10 @@ export default function CertificatePage() {
         const metaDisplayName = pickFirstNonEmptyString(
           user.user_metadata?.display_name
         );
+        const authMetadataName = pickFirstNonEmptyString(
+          metaFullName,
+          metaDisplayName
+        );
 
         // ---- Resolve using the documented priority chain. ----
         const resolvedName = pickFirstNonEmptyString(
@@ -278,7 +361,32 @@ export default function CertificatePage() {
           metaDisplayName
         );
 
+        // ---- TEMPORARY DEBUG — log + persist the raw values. ----
+        console.log('[CERTIFICATE DEBUG] userId:', user.id);
+        console.log('[CERTIFICATE DEBUG] authEmail:', user.email ?? null);
+        console.log('[CERTIFICATE DEBUG] authMetadataName:', authMetadataName);
+        console.log('[CERTIFICATE DEBUG] profileFullName:', profileFullName);
+        console.log('[CERTIFICATE DEBUG] profileDisplayName:', profileDisplayName);
+        console.log('[CERTIFICATE DEBUG] rawProfileObject:', rawProfileObject);
+        console.log('[CERTIFICATE DEBUG] profileError:', profileError);
+        console.log('[CERTIFICATE DEBUG] resolvedName:', resolvedName);
+
         if (!cancelled) {
+          setDebugInfo((prev) => ({
+            ...prev,
+            userId: user.id,
+            authEmail: user.email ?? null,
+            authMetadataName: authMetadataName || null,
+            profileFullName: profileFullName || null,
+            profileDisplayName: profileDisplayName || null,
+            profileQuery: {
+              attemptedColumns: 'full_name, display_name',
+              returnedRow: profileReturnedRow,
+              rawProfileObject,
+              error: profileError,
+            },
+          }));
+
           setUserFullName(resolvedName !== '' ? resolvedName : null);
           setAuthLoading(false);
         }
@@ -297,7 +405,7 @@ export default function CertificatePage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // DATA FETCH — payment status + quiz results (to compute eligibility)
+  // DATA FETCH — payment status + quiz results + reading_progress (debug)
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!userId) return;
@@ -352,8 +460,64 @@ export default function CertificatePage() {
         if (error) {
           console.warn('[Certificate] quiz query error:', error.message);
           setCourseStatuses(buildCourseStatuses([]));
+          setDebugInfo((prev) => ({
+            ...prev,
+            rawQuizResults: {
+              count: 0,
+              rows: [],
+              error: error.message,
+            },
+            earnedScore: 0,
+          }));
         } else {
-          setCourseStatuses(buildCourseStatuses((data ?? []) as any[]));
+          const rows = (data ?? []) as any[];
+          setCourseStatuses(buildCourseStatuses(rows));
+
+          // ---- TEMPORARY DEBUG — compute and log earned / max totals. ----
+          let earnedTotal = 0;
+          const earnedByCourse: Record<string, number> = {};
+          for (const row of rows) {
+            const slug = String(row?.course_id ?? '');
+            if (!slug) continue;
+            const score = Number(row?.score) || 0;
+            earnedTotal += score;
+            earnedByCourse[slug] = (earnedByCourse[slug] ?? 0) + score;
+          }
+
+          // Compute the same totalMaxScore used by `buildCourseStatuses`.
+          let totalMaxSum = 0;
+          const perCourseMax: Record<string, number> = {};
+          for (const course of REQUIRED_COURSES) {
+            const cap = getCourseCapacity(course.slug);
+            perCourseMax[course.slug] = cap;
+            totalMaxSum += cap;
+          }
+
+          console.log('[CERTIFICATE DEBUG] quiz_results count:', rows.length);
+          console.log('[CERTIFICATE DEBUG] quiz_results rows:', rows);
+          console.log('[CERTIFICATE DEBUG] earnedByCourse:', earnedByCourse);
+          console.log('[CERTIFICATE DEBUG] earnedScore (total):', earnedTotal);
+          console.log('[CERTIFICATE DEBUG] perCourseCapacity:', perCourseMax);
+          console.log(
+            '[CERTIFICATE DEBUG] totalMaxScore (sum of capacities):',
+            totalMaxSum
+          );
+
+          setDebugInfo((prev) => ({
+            ...prev,
+            rawQuizResults: {
+              count: rows.length,
+              rows,
+              error: null,
+            },
+            earnedScore: earnedTotal,
+            totalMaxScore: totalMaxSum,
+            totalMaxScoreBreakdown: {
+              courseCapacities: perCourseMax,
+              defaultCapacity: DEFAULT_COURSE_CAPACITY,
+              sumUsedInCalculation: totalMaxSum,
+            },
+          }));
         }
       } catch (err) {
         if (!cancelled) {
@@ -362,10 +526,65 @@ export default function CertificatePage() {
             readErrorMessage(err)
           );
           setCourseStatuses(buildCourseStatuses([]));
+          setDebugInfo((prev) => ({
+            ...prev,
+            rawQuizResults: {
+              count: 0,
+              rows: [],
+              error: readErrorMessage(err),
+            },
+            earnedScore: 0,
+          }));
         }
-      } finally {
-        if (!cancelled) setDataLoading(false);
       }
+
+      // ---- TEMPORARY DEBUG — reading_progress count ----
+      try {
+        const { count, error } = await supabase
+          .from('reading_progress')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', userId);
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn(
+            '[Certificate] reading_progress query error:',
+            error.message
+          );
+          setDebugInfo((prev) => ({
+            ...prev,
+            readingProgressCount: 0,
+            readingProgressError: error.message,
+          }));
+        } else {
+          const total = typeof count === 'number' ? count : 0;
+          console.log(
+            '[CERTIFICATE DEBUG] reading_progress count:',
+            total
+          );
+          setDebugInfo((prev) => ({
+            ...prev,
+            readingProgressCount: total,
+            readingProgressError: null,
+          }));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          const msg = readErrorMessage(err);
+          console.warn(
+            '[Certificate] reading_progress unexpected error:',
+            msg
+          );
+          setDebugInfo((prev) => ({
+            ...prev,
+            readingProgressCount: 0,
+            readingProgressError: msg,
+          }));
+        }
+      }
+
+      if (!cancelled) setDataLoading(false);
     };
 
     loadAll();
@@ -557,6 +776,24 @@ export default function CertificatePage() {
       {/* Main                                                              */}
       {/* ================================================================= */}
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10">
+        {/* ============================================================= */}
+        {/* TEMPORARY DEBUG PANEL — remove once the investigation is done. */}
+        {/* Shows the exact raw values fetched from Supabase so we can     */}
+        {/* diagnose: (a) why totalMaxScore is 0, and (b) why the name    */}
+        {/* resolves to email/metadata instead of profiles.full_name.      */}
+        {/* ============================================================= */}
+        <div className="bg-slate-900 text-green-400 p-4 rounded-lg font-mono text-xs my-4 overflow-auto max-h-[60vh]">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-amber-300 font-bold">
+              🐞 CERTIFICATE DEBUG (TEMPORARY)
+            </p>
+            <p className="text-slate-400">
+              {new Date().toLocaleTimeString()}
+            </p>
+          </div>
+          <pre>{JSON.stringify(debugInfo, null, 2)}</pre>
+        </div>
+
         {/* ---------- Feedback toasts ---------- */}
         {certError && !certLoading && (
           <div
