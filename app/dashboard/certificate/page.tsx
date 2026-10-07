@@ -60,40 +60,9 @@ interface CourseStatusEntry {
   percent: number;
   /** Total possible score (capacity) for this course. Used to guard against division-by-zero. */
   totalMaxScore: number;
-  passed: boolean;
-}
-
-/**
- * TEMPORARY DEBUG — shape of the diagnostic panel state.
- * Remove this interface together with the `debugInfo` state and the
- * rendered debug box below once the investigation is complete.
- */
-interface CertificateDebugInfo {
-  userId: string | null;
-  authEmail: string | null;
-  authMetadataName: string | null;
-  profileFullName: string | null;
-  profileDisplayName: string | null;
-  profileQuery: {
-    attemptedColumns: string;
-    returnedRow: boolean;
-    rawProfileObject: any;
-    error: string | null;
-  };
-  rawQuizResults: {
-    count: number;
-    rows: any[];
-    error: string | null;
-  };
+  /** Raw earned score for this course (sum of best `score` per quiz row). */
   earnedScore: number;
-  totalMaxScore: number;
-  totalMaxScoreBreakdown: {
-    courseCapacities: Record<string, number>;
-    defaultCapacity: number;
-    sumUsedInCalculation: number;
-  };
-  readingProgressCount: number;
-  readingProgressError: string | null;
+  passed: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +96,7 @@ function buildCourseStatuses(rawRows: any[]): CourseStatusEntry[] {
     const earned = earnedByCourse.get(slug) ?? 0;
     const totalMaxScore = getCourseCapacity(slug);
 
-    // ---- Division-by-zero fix ----
+    // ---- Division-by-zero guard ----
     // Coerce any non-finite / missing value to 0, then guard the division.
     const safeTotalMax = totalMaxScore || 0;
     const percentage =
@@ -140,6 +109,7 @@ function buildCourseStatuses(rawRows: any[]): CourseStatusEntry[] {
       displayName,
       percent: percentage,
       totalMaxScore: safeTotalMax,
+      earnedScore: earned,
       // Eligibility requires BOTH a real capacity AND a passing percentage.
       passed:
         safeTotalMax > 0 && percentage >= PASS_THRESHOLD_PERCENT,
@@ -205,39 +175,6 @@ export default function CertificatePage() {
   const [certSuccess, setCertSuccess] = useState<string | null>(null);
 
   // -------------------------------------------------------------------------
-  // TEMPORARY DEBUG — on-screen diagnostic panel.
-  // Populated by the auth guard + data-fetch effects below.
-  // Remove this block together with the debug UI box further down.
-  // -------------------------------------------------------------------------
-  const [debugInfo, setDebugInfo] = useState<CertificateDebugInfo>({
-    userId: null,
-    authEmail: null,
-    authMetadataName: null,
-    profileFullName: null,
-    profileDisplayName: null,
-    profileQuery: {
-      attemptedColumns: 'full_name, display_name',
-      returnedRow: false,
-      rawProfileObject: null,
-      error: null,
-    },
-    rawQuizResults: {
-      count: 0,
-      rows: [],
-      error: null,
-    },
-    earnedScore: 0,
-    totalMaxScore: 0,
-    totalMaxScoreBreakdown: {
-      courseCapacities: { ...COURSE_CAPACITY },
-      defaultCapacity: DEFAULT_COURSE_CAPACITY,
-      sumUsedInCalculation: 0,
-    },
-    readingProgressCount: 0,
-    readingProgressError: null,
-  });
-
-  // -------------------------------------------------------------------------
   // Dark-mode sync — mirrors the dashboard so this standalone page renders
   // correctly when opened directly.
   // -------------------------------------------------------------------------
@@ -257,12 +194,13 @@ export default function CertificatePage() {
   // AUTH GUARD + DISPLAY NAME RESOLUTION
   //
   // Name priority chain (first non-empty wins):
-  //   1. profiles.full_name              ← PRIMARY (matches the dashboard)
-  //   2. profiles.display_name           ← alternate profile column
-  //   3. user_metadata.full_name
-  //   4. user_metadata.display_name
-  //   5. Capitalized email prefix        ← cosmetic fallback
-  //   6. 'ተማሪ'                            ← absolute last resort
+  //   1. profiles.full_name              ← PRIMARY (source of truth)
+  //   2. user_metadata.full_name         ← auth-provided fallback
+  //   3. 'Ali'                            ← last resort (per product decision)
+  //
+  // NOTE: We deliberately query only `full_name` (not `display_name`)
+  //       because the profiles table in this environment does not expose a
+  //       `display_name` column.
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
@@ -284,110 +222,44 @@ export default function CertificatePage() {
         setUserId(user.id);
         setUserEmail(user.email ?? null);
 
-        // ---- 1 & 2. Query the profiles table FIRST (source of truth). ----
+        // ---- 1. Query the profiles table (only `full_name`). ----
         let profileFullName = '';
-        let profileDisplayName = '';
-        let profileError: string | null = null;
-        let profileReturnedRow = false;
-        let rawProfileObject: any = null;
 
         try {
-          // Try both `full_name` and `display_name` in a single query so we
-          // don't need to guess which column the schema actually has.
           const { data: profile, error: profileErr } = await supabase
             .from('profiles')
-            .select('full_name, display_name')
+            .select('full_name')
             .eq('id', user.id)
             .maybeSingle();
 
           if (profileErr) {
-            // Non-fatal: fall through to metadata / email.
-            profileError = profileErr.message;
             console.warn(
               '[Certificate] profiles lookup warning:',
               profileErr.message
             );
           } else if (profile) {
-            profileReturnedRow = true;
-            rawProfileObject = profile;
             profileFullName = pickFirstNonEmptyString(
               (profile as any).full_name
             );
-            profileDisplayName = pickFirstNonEmptyString(
-              (profile as any).display_name
-            );
           }
         } catch (profileCatch) {
-          // If the schema doesn't expose `display_name`, retry with just
-          // `full_name` so we still get a value when possible.
-          profileError = readErrorMessage(profileCatch);
-          try {
-            const { data: fallbackProfile } = await supabase
-              .from('profiles')
-              .select('full_name')
-              .eq('id', user.id)
-              .maybeSingle();
-            if (fallbackProfile) {
-              profileReturnedRow = true;
-              rawProfileObject = fallbackProfile;
-              profileFullName = pickFirstNonEmptyString(
-                (fallbackProfile as any)?.full_name
-              );
-            }
-          } catch (fallbackCatch) {
-            profileError =
-              profileError ||
-              readErrorMessage(fallbackCatch);
-          }
+          console.warn(
+            '[Certificate] profiles lookup unexpected error:',
+            readErrorMessage(profileCatch)
+          );
         }
 
-        // ---- 3 & 4. Fall back to auth user_metadata. ----
+        // ---- 2. Auth user_metadata.full_name fallback. ----
         const metaFullName = pickFirstNonEmptyString(
           user.user_metadata?.full_name
         );
-        const metaDisplayName = pickFirstNonEmptyString(
-          user.user_metadata?.display_name
-        );
-        const authMetadataName = pickFirstNonEmptyString(
-          metaFullName,
-          metaDisplayName
-        );
 
-        // ---- Resolve using the documented priority chain. ----
-        const resolvedName = pickFirstNonEmptyString(
-          profileFullName,
-          profileDisplayName,
-          metaFullName,
-          metaDisplayName
-        );
-
-        // ---- TEMPORARY DEBUG — log + persist the raw values. ----
-        console.log('[CERTIFICATE DEBUG] userId:', user.id);
-        console.log('[CERTIFICATE DEBUG] authEmail:', user.email ?? null);
-        console.log('[CERTIFICATE DEBUG] authMetadataName:', authMetadataName);
-        console.log('[CERTIFICATE DEBUG] profileFullName:', profileFullName);
-        console.log('[CERTIFICATE DEBUG] profileDisplayName:', profileDisplayName);
-        console.log('[CERTIFICATE DEBUG] rawProfileObject:', rawProfileObject);
-        console.log('[CERTIFICATE DEBUG] profileError:', profileError);
-        console.log('[CERTIFICATE DEBUG] resolvedName:', resolvedName);
+        // ---- 3. Resolve using the documented priority chain. ----
+        const studentName =
+          profileFullName || metaFullName || 'Ali';
 
         if (!cancelled) {
-          setDebugInfo((prev) => ({
-            ...prev,
-            userId: user.id,
-            authEmail: user.email ?? null,
-            authMetadataName: authMetadataName || null,
-            profileFullName: profileFullName || null,
-            profileDisplayName: profileDisplayName || null,
-            profileQuery: {
-              attemptedColumns: 'full_name, display_name',
-              returnedRow: profileReturnedRow,
-              rawProfileObject,
-              error: profileError,
-            },
-          }));
-
-          setUserFullName(resolvedName !== '' ? resolvedName : null);
+          setUserFullName(studentName);
           setAuthLoading(false);
         }
       } catch (err) {
@@ -405,7 +277,7 @@ export default function CertificatePage() {
   }, [router]);
 
   // -------------------------------------------------------------------------
-  // DATA FETCH — payment status + quiz results + reading_progress (debug)
+  // DATA FETCH — payment status + quiz results
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!userId) return;
@@ -460,64 +332,8 @@ export default function CertificatePage() {
         if (error) {
           console.warn('[Certificate] quiz query error:', error.message);
           setCourseStatuses(buildCourseStatuses([]));
-          setDebugInfo((prev) => ({
-            ...prev,
-            rawQuizResults: {
-              count: 0,
-              rows: [],
-              error: error.message,
-            },
-            earnedScore: 0,
-          }));
         } else {
-          const rows = (data ?? []) as any[];
-          setCourseStatuses(buildCourseStatuses(rows));
-
-          // ---- TEMPORARY DEBUG — compute and log earned / max totals. ----
-          let earnedTotal = 0;
-          const earnedByCourse: Record<string, number> = {};
-          for (const row of rows) {
-            const slug = String(row?.course_id ?? '');
-            if (!slug) continue;
-            const score = Number(row?.score) || 0;
-            earnedTotal += score;
-            earnedByCourse[slug] = (earnedByCourse[slug] ?? 0) + score;
-          }
-
-          // Compute the same totalMaxScore used by `buildCourseStatuses`.
-          let totalMaxSum = 0;
-          const perCourseMax: Record<string, number> = {};
-          for (const course of REQUIRED_COURSES) {
-            const cap = getCourseCapacity(course.slug);
-            perCourseMax[course.slug] = cap;
-            totalMaxSum += cap;
-          }
-
-          console.log('[CERTIFICATE DEBUG] quiz_results count:', rows.length);
-          console.log('[CERTIFICATE DEBUG] quiz_results rows:', rows);
-          console.log('[CERTIFICATE DEBUG] earnedByCourse:', earnedByCourse);
-          console.log('[CERTIFICATE DEBUG] earnedScore (total):', earnedTotal);
-          console.log('[CERTIFICATE DEBUG] perCourseCapacity:', perCourseMax);
-          console.log(
-            '[CERTIFICATE DEBUG] totalMaxScore (sum of capacities):',
-            totalMaxSum
-          );
-
-          setDebugInfo((prev) => ({
-            ...prev,
-            rawQuizResults: {
-              count: rows.length,
-              rows,
-              error: null,
-            },
-            earnedScore: earnedTotal,
-            totalMaxScore: totalMaxSum,
-            totalMaxScoreBreakdown: {
-              courseCapacities: perCourseMax,
-              defaultCapacity: DEFAULT_COURSE_CAPACITY,
-              sumUsedInCalculation: totalMaxSum,
-            },
-          }));
+          setCourseStatuses(buildCourseStatuses((data ?? []) as any[]));
         }
       } catch (err) {
         if (!cancelled) {
@@ -526,65 +342,10 @@ export default function CertificatePage() {
             readErrorMessage(err)
           );
           setCourseStatuses(buildCourseStatuses([]));
-          setDebugInfo((prev) => ({
-            ...prev,
-            rawQuizResults: {
-              count: 0,
-              rows: [],
-              error: readErrorMessage(err),
-            },
-            earnedScore: 0,
-          }));
         }
+      } finally {
+        if (!cancelled) setDataLoading(false);
       }
-
-      // ---- TEMPORARY DEBUG — reading_progress count ----
-      try {
-        const { count, error } = await supabase
-          .from('reading_progress')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', userId);
-
-        if (cancelled) return;
-
-        if (error) {
-          console.warn(
-            '[Certificate] reading_progress query error:',
-            error.message
-          );
-          setDebugInfo((prev) => ({
-            ...prev,
-            readingProgressCount: 0,
-            readingProgressError: error.message,
-          }));
-        } else {
-          const total = typeof count === 'number' ? count : 0;
-          console.log(
-            '[CERTIFICATE DEBUG] reading_progress count:',
-            total
-          );
-          setDebugInfo((prev) => ({
-            ...prev,
-            readingProgressCount: total,
-            readingProgressError: null,
-          }));
-        }
-      } catch (err) {
-        if (!cancelled) {
-          const msg = readErrorMessage(err);
-          console.warn(
-            '[Certificate] reading_progress unexpected error:',
-            msg
-          );
-          setDebugInfo((prev) => ({
-            ...prev,
-            readingProgressCount: 0,
-            readingProgressError: msg,
-          }));
-        }
-      }
-
-      if (!cancelled) setDataLoading(false);
     };
 
     loadAll();
@@ -594,7 +355,7 @@ export default function CertificatePage() {
   }, [userId]);
 
   // -------------------------------------------------------------------------
-  // Derived — eligibility
+  // Derived — eligibility + system-wide score
   // -------------------------------------------------------------------------
   const isPaymentApproved = paymentStatus === 'approved';
 
@@ -613,7 +374,26 @@ export default function CertificatePage() {
 
   const isEligible = isPaymentApproved && allCoursesPassed;
 
+  // ---- System-wide score (used for the eligibility warning text) ----
+  // Summed across the four required courses. `safeTotalMax` is guarded so a
+  // missing / zero capacity can never produce NaN / Infinity.
+  const systemEarnedScore = courseStatuses.reduce(
+    (acc, c) => acc + (Number(c.earnedScore) || 0),
+    0
+  );
+  const systemTotalMaxScore = courseStatuses.reduce(
+    (acc, c) => acc + (Number(c.totalMaxScore) || 0),
+    0
+  );
+  const safeTotalMax = systemTotalMaxScore || 0;
+  const systemPercentage =
+    safeTotalMax > 0
+      ? Math.round((systemEarnedScore / safeTotalMax) * 100)
+      : 0;
+
   // Final display name: profile-based name → email prefix → 'ተማሪ'.
+  // (userFullName is already resolved to 'Ali' if the profile + metadata
+  // are both missing — see the auth guard above.)
   const displayName =
     userFullName || userEmail?.split('@')[0] || 'ተማሪ';
 
@@ -776,24 +556,6 @@ export default function CertificatePage() {
       {/* Main                                                              */}
       {/* ================================================================= */}
       <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10">
-        {/* ============================================================= */}
-        {/* TEMPORARY DEBUG PANEL — remove once the investigation is done. */}
-        {/* Shows the exact raw values fetched from Supabase so we can     */}
-        {/* diagnose: (a) why totalMaxScore is 0, and (b) why the name    */}
-        {/* resolves to email/metadata instead of profiles.full_name.      */}
-        {/* ============================================================= */}
-        <div className="bg-slate-900 text-green-400 p-4 rounded-lg font-mono text-xs my-4 overflow-auto max-h-[60vh]">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-amber-300 font-bold">
-              🐞 CERTIFICATE DEBUG (TEMPORARY)
-            </p>
-            <p className="text-slate-400">
-              {new Date().toLocaleTimeString()}
-            </p>
-          </div>
-          <pre>{JSON.stringify(debugInfo, null, 2)}</pre>
-        </div>
-
         {/* ---------- Feedback toasts ---------- */}
         {certError && !certLoading && (
           <div
@@ -862,12 +624,18 @@ export default function CertificatePage() {
                 <h2 className="text-lg sm:text-xl font-extrabold text-amber-900 dark:text-amber-100 mb-2">
                   ሰርቲፊኬትዎ እስኪዘጋጅ ድረስ ይጠብቁ
                 </h2>
-                <p className="text-sm text-amber-800/90 dark:text-amber-200/85 leading-relaxed mb-5">
+                <p className="text-sm text-amber-800/90 dark:text-amber-200/85 leading-relaxed mb-3">
                   ሰርቲፊኬትዎን ለማግኘት ሁሉንም 4 ኪታቦች በማጠናቀቅ{' '}
                   <span className="font-semibold">
                     50% እና ከዚያ በላይ
                   </span>{' '}
                   ማግኘት እንዲሁም ክፍያዎ ማጽደቅ ይኖርብዎታል።
+                </p>
+
+                {/* Current system-wide score snapshot */}
+                <p className="text-xs sm:text-sm font-semibold text-amber-900/90 dark:text-amber-100/85 leading-relaxed mb-5">
+                  የአሁኑ ውጤት: {systemEarnedScore} / {safeTotalMax} (
+                  {systemPercentage}%)
                 </p>
 
                 {/* Checklist */}
