@@ -344,6 +344,16 @@ export default function DashboardPage() {
   const [userRole, setUserRole] = useState<string | null>(null);
 
   // -------------------------------------------------------------------------
+  // PROFILE FULL NAME — canonical student name from `public.profiles`.
+  //
+  // Fetched alongside the role (single query). This is the AUTHORITATIVE
+  // display name for the dashboard: it wins over any OAuth metadata so
+  // students who set a custom name (e.g. "Jemal") see that instead of
+  // their Google account name.
+  // -------------------------------------------------------------------------
+  const [profileFullName, setProfileFullName] = useState<string | null>(null);
+
+  // -------------------------------------------------------------------------
   // DYNAMIC COURSE CATALOGUE
   //
   // Starts with the hardcoded fallback so the UI never renders empty.
@@ -364,6 +374,32 @@ export default function DashboardPage() {
   const [certLoading, setCertLoading] = useState(false);
   const [certError, setCertError] = useState<string | null>(null);
   const [certSuccess, setCertSuccess] = useState<string | null>(null);
+
+  // -------------------------------------------------------------------------
+  // DISPLAY NAME — strict priority:
+  //
+  //   1. `profiles.full_name`                → canonical student name
+  //                                             (set at registration or
+  //                                             via /complete-profile).
+  //   2. `user.user_metadata.full_name`      → fallback to OAuth metadata.
+  //   3. `user.user_metadata.name`           → secondary metadata fallback
+  //                                             (used by some providers).
+  //   4. Literal 'ተጠቃሚ'                     → last-resort placeholder.
+  //
+  // NOTE: `user.email` is intentionally NOT used here — the welcome
+  // greeting should never show a raw email address.
+  //
+  // DECLARATION ORDER: this is computed as a plain const near the top of
+  // the component body (right after the state hooks) so that it is
+  // available to every callback and effect defined below — including
+  // `handleDownloadCertificate`, which depends on it.
+  // -------------------------------------------------------------------------
+  const displayName =
+    profileFullName ||
+    user?.full_name ||
+    (user as any)?.user_metadata?.full_name ||
+    (user as any)?.user_metadata?.name ||
+    'ተጠቃሚ';
 
   // -------------------------------------------------------------------------
   // Dark mode state & persistence (globally synced)
@@ -498,21 +534,26 @@ export default function DashboardPage() {
   }, []);
 
   // -------------------------------------------------------------------------
-  // FETCH USER ROLE (for the conditional admin cards)
+  // FETCH USER ROLE + PROFILE FULL NAME (single query)
   //
   // Runs once the auth state resolves. A failure here is non-fatal: we
-  // simply leave `userRole` as null, which keeps the admin section hidden
-  // and preserves the standard student view.
+  // simply leave `userRole` as null (admin section hidden) and
+  // `profileFullName` as null (fallback to auth metadata / email).
+  //
+  // The `full_name` column is the AUTHORITATIVE display name for the
+  // dashboard — this is the value the student set during registration
+  // (or via /complete-profile), and it always wins over any Google/OAuth
+  // account name.
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
 
-    const fetchRole = async () => {
+    const fetchRoleAndName = async () => {
       try {
         const { data, error } = await supabase
           .from('profiles')
-          .select('role')
+          .select('role, full_name')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -520,26 +561,36 @@ export default function DashboardPage() {
 
         if (error) {
           console.warn(
-            '[Dashboard] role fetch error — admin section hidden:',
+            '[Dashboard] profile fetch error — falling back to auth metadata:',
             error.message
           );
           setUserRole(null);
+          setProfileFullName(null);
           return;
         }
 
+        // Role (drives the admin cards).
         setUserRole(data?.role ? String(data.role) : null);
+
+        // Full name (drives the greeting) — only trust non-empty strings.
+        const fullName =
+          data && typeof data.full_name === 'string'
+            ? data.full_name.trim()
+            : '';
+        setProfileFullName(fullName !== '' ? fullName : null);
       } catch (err) {
         if (!cancelled) {
           console.warn(
-            '[Dashboard] role fetch unexpected error — admin section hidden:',
+            '[Dashboard] profile fetch unexpected error — falling back to auth metadata:',
             readErrorMessage(err)
           );
           setUserRole(null);
+          setProfileFullName(null);
         }
       }
     };
 
-    fetchRole();
+    fetchRoleAndName();
     return () => {
       cancelled = true;
     };
@@ -771,6 +822,9 @@ export default function DashboardPage() {
   // /dashboard/certificate page. This handler is retained for use by that
   // page (or any future caller) and is intentionally NOT invoked from the
   // dashboard UI.
+  //
+  // `displayName` is defined ABOVE this callback, so both the body and the
+  // dependency array can safely reference it.
   // -------------------------------------------------------------------------
   const handleDownloadCertificate = useCallback(async () => {
     if (!user?.id) {
@@ -828,9 +882,7 @@ export default function DashboardPage() {
         return;
       }
 
-      const filename = buildCertificateFilename(
-        user.full_name || user.email || 'Student'
-      );
+      const filename = buildCertificateFilename(displayName);
 
       const fileRes = await fetch(certificateUrl);
       if (!fileRes.ok) {
@@ -866,7 +918,7 @@ export default function DashboardPage() {
     } finally {
       setCertLoading(false);
     }
-  }, [user?.id, user?.full_name, user?.email]);
+  }, [user?.id, displayName]);
 
   // -------------------------------------------------------------------------
   // Derived state
@@ -938,8 +990,6 @@ export default function DashboardPage() {
       </div>
     );
   }
-
-  const displayName = user.full_name || user.email || 'ተማሪ';
 
   // -------------------------------------------------------------------------
   // Render
