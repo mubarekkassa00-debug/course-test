@@ -195,6 +195,21 @@ const DEFAULT_UNLOCKED: Record<number, boolean> = {
 // Main Component
 // ---------------------------------------------------------------------------
 export default function CoursesPage() {
+  // =========================================================================
+  // TESTING TOGGLE — UNLOCK ALL COURSES
+  //
+  //   `true`  → bypasses the entire course-prerequisite chain. Every course
+  //             card renders in its active / unlocked state, and the "ትምህርቱን
+  //             ጀምር" button navigates normally.
+  //
+  //   `false` → restores the original production behavior 100%: each course
+  //             is gated behind the FULL completion (all lessons + final
+  //             exam, ≥ 50%) of the previous course in `COURSE_PROGRESSION`.
+  //
+  // Flip this to `false` to ship for production.
+  // =========================================================================
+  const UNLOCK_ALL_COURSES = true; // Set to false to restore course prerequisites
+
   const [hasMounted, setHasMounted] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -227,6 +242,9 @@ export default function CoursesPage() {
   // Silent on any failure: if we can't read the results, we fall back to
   // showing every course as unlocked, matching the pre-refactor behaviour
   // and avoiding a hard "stuck locked" state for the user.
+  //
+  // When UNLOCK_ALL_COURSES is true, the fetch still runs (so the state
+  // stays consistent) but its result is ignored at render time.
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!hasMounted) return;
@@ -420,7 +438,14 @@ export default function CoursesPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-12">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {courses.map((course) => {
-            const isLocked = !unlockedMap[course.id];
+            // -----------------------------------------------------------------
+            // TESTING BYPASS — when UNLOCK_ALL_COURSES is true, every course
+            // is treated as unlocked. Restore production behavior by setting
+            // the flag to `false` at the top of the component.
+            // -----------------------------------------------------------------
+            const isLocked = UNLOCK_ALL_COURSES
+              ? false
+              : !unlockedMap[course.id];
 
             return (
               <div
@@ -497,7 +522,10 @@ export default function CoursesPage() {
                   </div>
 
                   {/* Action — active Link when unlocked, disabled button
-                      when locked by the prerequisite chain. */}
+                      when locked by the prerequisite chain.
+
+                      When UNLOCK_ALL_COURSES is true, `isLocked` is always
+                      false, so every card renders the active Link. */}
                   {isLocked ? (
                     <button
                       type="button"
