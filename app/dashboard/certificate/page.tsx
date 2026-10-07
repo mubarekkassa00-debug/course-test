@@ -749,7 +749,9 @@ export default function CertificatePage() {
               <div className="relative p-6 sm:p-10">
                 {/* Double border ornament */}
                 <div className="rounded-2xl border-2 border-emerald-300/60 dark:border-emerald-800/60 p-5 sm:p-8">
-                  <div className="rounded-xl border border-amber-300/70 dark:border-amber-800/50 bg-white/70 dark:bg-slate-900/60 backdrop-blur-sm px-5 py-8 sm:px-10 sm:py-12 text-center">
+                  {/* NOTE: `relative` added so the seal can be absolutely
+                      positioned in the bottom-right corner of this frame. */}
+                  <div className="relative rounded-xl border border-amber-300/70 dark:border-amber-800/50 bg-white/70 dark:bg-slate-900/60 backdrop-blur-sm px-5 py-8 sm:px-10 sm:py-12 text-center">
                     {/* Award icon */}
                     <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-600 shadow-lg shadow-amber-900/25">
                       <Award className="h-10 w-10 text-white" />
@@ -793,6 +795,22 @@ export default function CertificatePage() {
                       ))}
                     </div>
 
+                    {/* ---------- Digital signature ---------- */}
+                    {/* The transparent PNG sits directly above the rule line
+                        and its caption, mimicking a hand-signed certificate. */}
+                    <div className="mt-10 flex flex-col items-center">
+                      <img
+                        src="/signature.png"
+                        alt="Signature"
+                        className="h-10 w-auto mx-auto object-contain mb-1"
+                      />
+                      <div className="w-40 border-t border-slate-400/60 dark:border-slate-500/60 pt-1">
+                        <p className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400">
+                          Authorised Signature
+                        </p>
+                      </div>
+                    </div>
+
                     <div className="mt-8 flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                       <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                       <span>
@@ -800,6 +818,16 @@ export default function CertificatePage() {
                         {new Date().getFullYear()}
                       </span>
                     </div>
+
+                    {/* ---------- Official seal ---------- */}
+                    {/* Absolutely positioned in the bottom-right corner of
+                        the certificate frame. `pointer-events-none` keeps
+                        it from ever intercepting clicks on nearby content. */}
+                    <img
+                      src="/seal.png"
+                      alt="Seal"
+                      className="pointer-events-none absolute bottom-4 right-4 sm:bottom-6 sm:right-6 h-16 w-16 sm:h-20 sm:w-20 object-contain opacity-90 select-none"
+                    />
                   </div>
                 </div>
               </div>
