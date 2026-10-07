@@ -3,6 +3,7 @@
 
 import { useState, useCallback, FormEvent } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import {
@@ -359,12 +360,12 @@ export default function LoginPage() {
 
               {/* Forgot password link */}
               <div className="mt-2 text-right">
-                <a
-                  href="/auth/reset-password"
-                  className="text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
+                <Link
+                  href="/forgot-password"
+                  className="text-xs text-emerald-400 hover:underline"
                 >
                   የይለፍ ቃል ረስተዋል?
-                </a>
+                </Link>
               </div>
             </div>
 
