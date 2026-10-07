@@ -25,6 +25,15 @@ import {
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
+// TEMPORARY TEST BYPASS - REVERT LATER
+// ---------------------------------------------------------------------------
+// Set to `true` to skip all real certificate-eligibility checks and display
+// the certificate preview + download flow using forced test values. Set to
+// `false` (or delete this constant and the `TEMP_TEST_BYPASS` branches below)
+// to restore the original production logic.
+const TEMP_TEST_BYPASS = true; // TEMPORARY TEST BYPASS - REVERT LATER
+
+// ---------------------------------------------------------------------------
 // Constants — Basira's 4 required Kitabs
 // ---------------------------------------------------------------------------
 const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
@@ -81,6 +90,29 @@ function buildCourseStatuses(rawRows: any[]): CourseStatusEntry[] {
   }
 
   return REQUIRED_COURSES.map(({ slug, displayName }) => {
+    // TEMPORARY TEST BYPASS - REVERT LATER
+    // Force default test values so the certificate preview can be tested
+    // without completing every course. Fallback test values:
+    //   earnedScore    = 100
+    //   totalMaxScore  = 100
+    //   percentage     = 100  (prevents division-by-zero → NaN/0%)
+    if (TEMP_TEST_BYPASS) {
+      const earnedScore = 100; // TEMPORARY TEST BYPASS - REVERT LATER
+      const totalMaxScore = 100; // TEMPORARY TEST BYPASS - REVERT LATER
+      const percentage =
+        totalMaxScore > 0
+          ? Math.min(100, Math.round((earnedScore / totalMaxScore) * 100))
+          : 100; // TEMPORARY TEST BYPASS - REVERT LATER
+
+      return {
+        slug,
+        displayName,
+        percent: percentage,
+        passed: true, // TEMPORARY TEST BYPASS - REVERT LATER
+      };
+    }
+
+    // ----- Original production logic (untouched) -----
     const earned = earnedByCourse.get(slug) ?? 0;
     const capacity = getCourseCapacity(slug);
     const percent =
@@ -308,7 +340,15 @@ export default function CertificatePage() {
     courseStatuses.length === REQUIRED_COURSES.length &&
     passedCount === REQUIRED_COURSES.length;
 
-  const isEligible = isPaymentApproved && allCoursesPassed;
+  // Real eligibility (kept intact for easy revert).
+  const realIsEligible = isPaymentApproved && allCoursesPassed;
+
+  // TEMPORARY TEST BYPASS - REVERT LATER
+  // Force eligibility to `true` so the certificate preview + download flow
+  // can be exercised without completing every course or awaiting payment
+  // approval. To revert, delete the `TEMP_TEST_BYPASS ?` branch and keep the
+  // original expression: `const isEligible = isPaymentApproved && allCoursesPassed;`
+  const isEligible = TEMP_TEST_BYPASS ? true : realIsEligible; // TEMPORARY TEST BYPASS - REVERT LATER
 
   const displayName =
     userFullName || userEmail?.split('@')[0] || 'ተማሪ';
