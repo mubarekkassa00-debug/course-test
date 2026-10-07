@@ -39,6 +39,8 @@ import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import PDFDocument from 'pdfkit';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Route configuration
@@ -90,6 +92,36 @@ const NOT_ELIGIBLE_MESSAGE =
  * collapsing to zero.
  */
 const DEFAULT_QUESTIONS_PER_LESSON = 10;
+
+// ---------------------------------------------------------------------------
+// Local asset loader — reads PNGs from `public/` for PDF embedding
+// ---------------------------------------------------------------------------
+//
+// Returns `null` on any failure (missing file, permissions, unsupported
+// filesystem) so the certificate PDF can still be generated — just without
+// the signature / seal — instead of throwing a 500 to the client.
+//
+// PNG transparency is preserved natively by PDFKit, so a correctly-authored
+// transparent PNG renders with no background box.
+// ---------------------------------------------------------------------------
+function loadPublicImage(filename: string): Buffer | null {
+  try {
+    const fullPath = path.join(process.cwd(), 'public', filename);
+    if (!fs.existsSync(fullPath)) {
+      console.warn(
+        `[generate-certificate] Optional asset not found (PDF will render without it): ${fullPath}`
+      );
+      return null;
+    }
+    return fs.readFileSync(fullPath);
+  } catch (err) {
+    console.warn(
+      `[generate-certificate] Failed to read optional asset "${filename}":`,
+      err instanceof Error ? err.message : String(err)
+    );
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Supabase service-role client (lazy, cached) — anon-key fallback
@@ -899,14 +931,82 @@ function generateCertificatePdf(opts: {
         y += 20;
       }
 
+      // ---------------------------------------------------------------------
+      // Digital signature — embedded from `public/signature.png`
+      //
+      // The PNG floats immediately above the horizontal rule, centered on
+      // the signature column. PDFKit preserves the PNG's alpha channel, so
+      // a correctly-authored transparent PNG renders cleanly with no
+      // background box.
+      //
+      // If the file is missing or unreadable, `loadPublicImage` returns
+      // `null` and we simply skip the image — the rule line and caption
+      // below still render so the certificate stays visually complete.
+      // ---------------------------------------------------------------------
       const sigY = 468;
       const sigHalf = 80;
+
+      const signatureBuffer = loadPublicImage('signature.png');
+      if (signatureBuffer) {
+        const sigBoxW = 180;
+        const sigBoxH = 45;
+        const sigBoxX = cx - sigBoxW / 2;
+        const sigBoxY = sigY - sigBoxH - 4; // sits just above the rule line
+
+        try {
+          doc.image(signatureBuffer, sigBoxX, sigBoxY, {
+            fit: [sigBoxW, sigBoxH],
+            align: 'center',
+            valign: 'bottom',
+          });
+        } catch (sigErr) {
+          console.warn(
+            '[generate-certificate] Failed to embed signature image:',
+            sigErr instanceof Error ? sigErr.message : String(sigErr)
+          );
+        }
+      }
+
+      // Horizontal rule + caption below the signature image.
       doc.moveTo(cx - sigHalf, sigY).lineTo(cx + sigHalf, sigY)
         .lineWidth(0.5).strokeColor(SLATE).stroke();
       doc.fillColor(SLATE).font('Helvetica-Oblique').fontSize(9)
         .text('Authorized Signature', cx - sigHalf, sigY + 5, {
           width: sigHalf * 2, align: 'center',
         });
+
+      // ---------------------------------------------------------------------
+      // Official seal — embedded from `public/seal.png`
+      //
+      // Anchored in the bottom-right corner, inside the inner border ring
+      // and above the footer labels. The box is fixed at 100×100pt so the
+      // seal never collides with the book list (which ends around y≈436 on
+      // the right side is empty) or the footer text (y≈517).
+      //
+      // PDFKit preserves the PNG's alpha channel — a properly-authored
+      // transparent seal renders with no black background box.
+      // ---------------------------------------------------------------------
+      const sealBuffer = loadPublicImage('seal.png');
+      if (sealBuffer) {
+        const sealBoxW = 100;
+        const sealBoxH = 100;
+        const sealRightMargin = 70; // from PAGE_W
+        const sealBoxX = PAGE_W - sealRightMargin - sealBoxW;
+        const sealBoxY = 380;
+
+        try {
+          doc.image(sealBuffer, sealBoxX, sealBoxY, {
+            fit: [sealBoxW, sealBoxH],
+            align: 'center',
+            valign: 'center',
+          });
+        } catch (sealErr) {
+          console.warn(
+            '[generate-certificate] Failed to embed seal image:',
+            sealErr instanceof Error ? sealErr.message : String(sealErr)
+          );
+        }
+      }
 
       const footLabelY = PAGE_H - 78;
       const footValueY = PAGE_H - 62;
