@@ -47,26 +47,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // ---------------------------------------------------------------------------
-// TEMPORARY TEST BYPASS - REVERT LATER
-// ---------------------------------------------------------------------------
-// When `true`, the API skips the following server-side gates so the
-// certificate PDF is always generated regardless of payment status or
-// quiz-completion state:
-//
-//   • userId ↔ session mismatch (returns 403)
-//   • payment approval        (returns 403)
-//   • curriculum eligibility  (returns 400)
-//
-// The authentication check (401) is intentionally LEFT IN PLACE so we still
-// have a valid `userId` to name the PDF and folder. Set this to `false`
-// (or delete the constant together with every `TEMP_TEST_BYPASS` branch) to
-// restore full production enforcement.
-//
-// TODO: REVERT BEFORE PRODUCTION.
-// ---------------------------------------------------------------------------
-const TEMP_TEST_BYPASS = true; // TEMPORARY TEST BYPASS - REVERT LATER
-
-// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -530,9 +510,6 @@ async function fetchCurriculumData(
 // denominator, which allowed a single completed lesson (e.g. 5/10) to reach
 // 50% locally and unlock the certificate. This version enforces the true
 // curriculum-wide percentage instead.
-//
-// NOTE: This function is retained in full so the check can be re-enabled
-//       simply by flipping `TEMP_TEST_BYPASS` back to `false`.
 // ---------------------------------------------------------------------------
 
 interface EligibilityResult {
@@ -960,11 +937,6 @@ function generateCertificatePdf(opts: {
 
 export async function POST(request: Request) {
   // ---------- 1. Authenticate the caller from request cookies ----------
-  //
-  // NOTE: The 401 check below is intentionally KEPT IN PLACE even during
-  // TEMP_TEST_BYPASS because we still need a valid session to determine the
-  // `userId` used for the filename and storage folder. Only the 400/403
-  // gates further down are bypassed.
   const { user: authUser, error: authError } = await getAuthClient();
 
   if (authError || !authUser) {
@@ -997,11 +969,7 @@ export async function POST(request: Request) {
 
   // The authenticated user's ID is the source of truth. If the client sent
   // a different `userId`, reject — this prevents cross-user abuse.
-  //
-  // TEMPORARY TEST BYPASS - REVERT LATER
-  // Skipped when `TEMP_TEST_BYPASS` is true so testing with a mismatched
-  // body userId (or an empty one) still proceeds.
-  if (!TEMP_TEST_BYPASS && bodyUserId && bodyUserId !== authUser.id) {
+  if (bodyUserId && bodyUserId !== authUser.id) {
     console.error(
       '[generate-certificate] userId mismatch — auth:',
       authUser.id,
@@ -1042,70 +1010,48 @@ export async function POST(request: Request) {
   }
 
   // ---------- 4. Verify payment approval ----------
-  //
-  // TEMPORARY TEST BYPASS - REVERT LATER
-  // The payment-approval query and its 403 response are skipped entirely
-  // when `TEMP_TEST_BYPASS` is true. The original block is preserved so it
-  // can be restored by flipping the flag back to `false`.
-  if (!TEMP_TEST_BYPASS) {
-    const { data: approvedRows, error: paymentErr } = await supabase
-      .from('payments')
-      .select('id, status')
-      .eq('user_id', userId)
-      .eq('status', 'approved')
-      .limit(1);
+  const { data: approvedRows, error: paymentErr } = await supabase
+    .from('payments')
+    .select('id, status')
+    .eq('user_id', userId)
+    .eq('status', 'approved')
+    .limit(1);
 
-    if (paymentErr) {
-      console.error('[generate-certificate] payments error:', paymentErr);
-      return NextResponse.json(
-        { eligible: false, error: 'Failed to verify payment.' },
-        { status: 500 }
-      );
-    }
+  if (paymentErr) {
+    console.error('[generate-certificate] payments error:', paymentErr);
+    return NextResponse.json(
+      { eligible: false, error: 'Failed to verify payment.' },
+      { status: 500 }
+    );
+  }
 
-    if (!approvedRows || approvedRows.length === 0) {
-      return NextResponse.json(
-        {
-          eligible: false,
-          error: 'ሰርተፊኬት ለማውረድ ክፍያዎ በአድሚን መረጋገጥ አለበት።',
-        },
-        { status: 403 }
-      );
-    }
-  } else {
-    console.warn(
-      '[generate-certificate] TEMP_TEST_BYPASS — payment approval check skipped.'
+  if (!approvedRows || approvedRows.length === 0) {
+    return NextResponse.json(
+      {
+        eligible: false,
+        error: 'ሰርተፊኬት ለማውረድ ክፍያዎ በአድሚን መረጋገጥ አለበት።',
+      },
+      { status: 403 }
     );
   }
 
   // ---------- 5. Evaluate lessons + final exam + system-wide score ----------
-  //
-  // TEMPORARY TEST BYPASS - REVERT LATER
-  // The eligibility evaluation and its 400 response are skipped entirely
-  // when `TEMP_TEST_BYPASS` is true. The `evaluateEligibility` helper is
-  // untouched and will run again as soon as the flag is flipped to `false`.
-  if (!TEMP_TEST_BYPASS) {
-    const eligibility = await evaluateEligibility(supabase, userId);
+  const eligibility = await evaluateEligibility(supabase, userId);
 
-    if (!eligibility.eligible) {
-      console.warn(
-        '[generate-certificate] Eligibility failed for user',
-        userId,
-        '—',
-        eligibility.details
-      );
-      return NextResponse.json(
-        {
-          eligible: false,
-          error: eligibility.reason || NOT_ELIGIBLE_MESSAGE,
-          details: eligibility.details,
-        },
-        { status: 400 }
-      );
-    }
-  } else {
+  if (!eligibility.eligible) {
     console.warn(
-      '[generate-certificate] TEMP_TEST_BYPASS — eligibility check skipped.'
+      '[generate-certificate] Eligibility failed for user',
+      userId,
+      '—',
+      eligibility.details
+    );
+    return NextResponse.json(
+      {
+        eligible: false,
+        error: eligibility.reason || NOT_ELIGIBLE_MESSAGE,
+        details: eligibility.details,
+      },
+      { status: 400 }
     );
   }
 

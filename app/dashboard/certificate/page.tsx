@@ -25,15 +25,6 @@ import {
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// TEMPORARY TEST BYPASS - REVERT LATER
-// ---------------------------------------------------------------------------
-// Set to `true` to skip all real certificate-eligibility checks and display
-// the certificate preview + download flow using forced test values. Set to
-// `false` (or delete this constant and the `TEMP_TEST_BYPASS` branches below)
-// to restore the original production logic.
-const TEMP_TEST_BYPASS = true; // TEMPORARY TEST BYPASS - REVERT LATER
-
-// ---------------------------------------------------------------------------
 // Constants — Basira's 4 required Kitabs
 // ---------------------------------------------------------------------------
 const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
@@ -67,6 +58,8 @@ interface CourseStatusEntry {
   slug: string;
   displayName: string;
   percent: number;
+  /** Total possible score (capacity) for this course. Used to guard against division-by-zero. */
+  totalMaxScore: number;
   passed: boolean;
 }
 
@@ -79,6 +72,14 @@ function getCourseCapacity(slug: string): number {
   return DEFAULT_COURSE_CAPACITY;
 }
 
+/**
+ * Build a per-course status entry from raw `quiz_results` rows.
+ *
+ * The percentage is computed with a strict `totalMaxScore > 0` guard so a
+ * zero-capacity course can never produce NaN / Infinity. A course is only
+ * considered passed when it actually has capacity AND the earned percentage
+ * meets the pass threshold.
+ */
 function buildCourseStatuses(rawRows: any[]): CourseStatusEntry[] {
   const earnedByCourse = new Map<string, number>();
 
@@ -90,40 +91,23 @@ function buildCourseStatuses(rawRows: any[]): CourseStatusEntry[] {
   }
 
   return REQUIRED_COURSES.map(({ slug, displayName }) => {
-    // TEMPORARY TEST BYPASS - REVERT LATER
-    // Force default test values so the certificate preview can be tested
-    // without completing every course. Fallback test values:
-    //   earnedScore    = 100
-    //   totalMaxScore  = 100
-    //   percentage     = 100  (prevents division-by-zero → NaN/0%)
-    if (TEMP_TEST_BYPASS) {
-      const earnedScore = 100; // TEMPORARY TEST BYPASS - REVERT LATER
-      const totalMaxScore = 100; // TEMPORARY TEST BYPASS - REVERT LATER
-      const percentage =
-        totalMaxScore > 0
-          ? Math.min(100, Math.round((earnedScore / totalMaxScore) * 100))
-          : 100; // TEMPORARY TEST BYPASS - REVERT LATER
-
-      return {
-        slug,
-        displayName,
-        percent: percentage,
-        passed: true, // TEMPORARY TEST BYPASS - REVERT LATER
-      };
-    }
-
-    // ----- Original production logic (untouched) -----
     const earned = earnedByCourse.get(slug) ?? 0;
-    const capacity = getCourseCapacity(slug);
-    const percent =
-      capacity > 0
-        ? Math.min(100, Math.round((earned / capacity) * 100))
+    const totalMaxScore = getCourseCapacity(slug);
+
+    // Division-by-zero guard: a zero (or negative) capacity yields 0%.
+    const percentage =
+      totalMaxScore > 0
+        ? Math.min(100, Math.round((earned / totalMaxScore) * 100))
         : 0;
+
     return {
       slug,
       displayName,
-      percent,
-      passed: percent >= PASS_THRESHOLD_PERCENT,
+      percent: percentage,
+      totalMaxScore,
+      // Eligibility requires BOTH a real capacity AND a passing percentage.
+      passed:
+        totalMaxScore > 0 && percentage >= PASS_THRESHOLD_PERCENT,
     };
   });
 }
@@ -336,19 +320,13 @@ export default function CertificatePage() {
     [courseStatuses]
   );
 
+  // `allCoursesPassed` is true only when every required course has a real
+  // capacity (> 0) and meets the pass threshold — see `buildCourseStatuses`.
   const allCoursesPassed =
     courseStatuses.length === REQUIRED_COURSES.length &&
     passedCount === REQUIRED_COURSES.length;
 
-  // Real eligibility (kept intact for easy revert).
-  const realIsEligible = isPaymentApproved && allCoursesPassed;
-
-  // TEMPORARY TEST BYPASS - REVERT LATER
-  // Force eligibility to `true` so the certificate preview + download flow
-  // can be exercised without completing every course or awaiting payment
-  // approval. To revert, delete the `TEMP_TEST_BYPASS ?` branch and keep the
-  // original expression: `const isEligible = isPaymentApproved && allCoursesPassed;`
-  const isEligible = TEMP_TEST_BYPASS ? true : realIsEligible; // TEMPORARY TEST BYPASS - REVERT LATER
+  const isEligible = isPaymentApproved && allCoursesPassed;
 
   const displayName =
     userFullName || userEmail?.split('@')[0] || 'ተማሪ';

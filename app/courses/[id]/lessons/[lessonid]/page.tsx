@@ -1180,10 +1180,8 @@ export default function LessonPage() {
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Strict audio finish lock (do not modify).
-  // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS → default is now `true`.
-  const [isAudioFinished, setIsAudioFinished] = useState(true); // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
-  // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS → default is now `true`.
-  const [isQuizUnlocked, setIsQuizUnlocked] = useState(true); // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
+  const [isAudioFinished, setIsAudioFinished] = useState(false);
+  const [isQuizUnlocked, setIsQuizUnlocked] = useState(false);
 
   const [quiz, setQuiz] = useState<any>(null);
   const [questions, setQuestions] = useState<NormalizedQuestion[]>([]);
@@ -1224,16 +1222,10 @@ export default function LessonPage() {
   //                     submit button must not be shown.
   //   hasFailedBefore → the student previously scored < 50%. The quiz
   //                     stays fully unlocked so they can retake it.
-  //
-  // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
-  //   hasPassedBefore is forced to `false` so a passed quiz can be
-  //   retaken during testing.
   // ------------------------------------------------------------------
-  const hasPassedBefore = false; // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
-  // Original computation (kept for reference):
-  // const hasPassedBefore =
-  //   savedScore !== null &&
-  //   savedScore.percentage >= PASS_THRESHOLD_PERCENT;
+  const hasPassedBefore =
+    savedScore !== null &&
+    savedScore.percentage >= PASS_THRESHOLD_PERCENT;
 
   const hasFailedBefore =
     savedScore !== null &&
@@ -1247,8 +1239,8 @@ export default function LessonPage() {
   // Reset UI on lesson change (including final exam).
   useEffect(() => {
     setCurrentImg(0);
-    setIsAudioFinished(true); // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
-    setIsQuizUnlocked(true);  // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
+    setIsAudioFinished(false);
+    setIsQuizUnlocked(false);
     setActiveTab('lesson');
     setQuizSubmitted(false);
     setScore(null);
@@ -1334,22 +1326,15 @@ export default function LessonPage() {
   //
   // While `paymentLoading` is true we return false so trial/paid users
   // never briefly see the payment modal before the check resolves.
-  //
-  // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
-  //   requiresPayment is forced to `false` so lessons 4+ and the final
-  //   exam open without an approved payment.
   // ------------------------------------------------------------------
   const localLessonNumber = lesson ? getLocalLessonNumber(lesson.lessonNumber) : null;
 
-  // TEMPORARY TEST BYPASS - UNLOCK ALL LESSONS
-  const requiresPayment = false;
-  // Original computation (kept for reference):
-  // const requiresPayment =
-  //   !paymentLoading &&
-  //   !isPaid &&
-  //   (isFinalExam ||
-  //     (localLessonNumber !== null &&
-  //       localLessonNumber > FREE_TRIAL_LESSON_COUNT));
+  const requiresPayment =
+    !paymentLoading &&
+    !isPaid &&
+    (isFinalExam ||
+      (localLessonNumber !== null &&
+        localLessonNumber > FREE_TRIAL_LESSON_COUNT));
 
   // Auto-open the payment modal whenever the student lands on a
   // payment-required lesson. Auto-close it if the requirement is

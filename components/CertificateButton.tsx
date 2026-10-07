@@ -43,19 +43,6 @@ import {
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
-// TEMPORARY TEST BYPASS
-// ---------------------------------------------------------------------------
-// When `true`, the download/generate button is ALWAYS rendered in its
-// enabled state and its `disabled` attribute is forced to `false`, so the
-// PDF generation flow can be exercised without satisfying the eligibility
-// checklist. Set to `false` (or delete this constant together with the
-// two `TEMP_TEST_BYPASS` branches below) to restore the original gating.
-//
-// TODO: REVERT BEFORE PRODUCTION.
-// ---------------------------------------------------------------------------
-const TEMP_TEST_BYPASS = true; // TEMPORARY TEST BYPASS - REVERT LATER
-
-// ---------------------------------------------------------------------------
 // Supabase browser client (module-level singleton — matches the rest of app)
 // ---------------------------------------------------------------------------
 const supabase = createBrowserClient(
@@ -954,23 +941,11 @@ export default function CertificateButton({
       </div>
 
       {/* ---------- Main download button ---------- */}
-      {/*
-        TEMPORARY TEST BYPASS - REVERT LATER
-        When `TEMP_TEST_BYPASS` is true, the enabled download button branch
-        is forced regardless of the eligibility snapshot, so the PDF flow
-        can be tested end-to-end.
-      */}
-      {TEMP_TEST_BYPASS || snapshot.eligible ? ( // TEMPORARY TEST BYPASS - REVERT LATER
+      {snapshot.eligible ? (
         <button
           type="button"
           onClick={handleDownload}
-          /*
-            TEMPORARY TEST BYPASS - REVERT LATER
-            Force `disabled` to `false` so the button remains clickable even
-            while a request is in flight (which would normally set
-            `downloading=true`).
-          */
-          disabled={TEMP_TEST_BYPASS ? false : downloading} // TEMPORARY TEST BYPASS - REVERT LATER
+          disabled={downloading}
           aria-busy={downloading}
           className={[
             'w-full inline-flex items-center justify-center gap-2',
