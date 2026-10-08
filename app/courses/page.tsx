@@ -180,15 +180,30 @@ function computeUnlockedMap(rows: any[]): Record<number, boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// Default unlocked map — used before the fetch resolves so no course is
-// briefly rendered as locked on the very first paint. After the fetch, the
-// real map replaces this.
+// Default unlocked map — PESSIMISTIC.
+//
+// Before the fetch resolves we cannot know whether the student has
+// completed the previous courses, so we default to the STRICT
+// prerequisite chain:
+//
+//   Course 1 → unlocked (no prerequisites, by design)
+//   Course 2 → locked
+//   Course 3 → locked
+//   Course 4 → locked
+//
+// This guarantees that a course which is ultimately locked cannot
+// briefly flash as unlocked on the very first paint. Once the
+// `quiz_results` fetch resolves, the real unlock map replaces this.
+//
+// The same map is used as the fallback on fetch errors and when no
+// authenticated user is found, so a network glitch or a signed-out
+// visitor never briefly sees everything unlocked.
 // ---------------------------------------------------------------------------
 const DEFAULT_UNLOCKED: Record<number, boolean> = {
   1: true,
-  2: true,
-  3: true,
-  4: true,
+  2: false,
+  3: false,
+  4: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -206,9 +221,9 @@ export default function CoursesPage() {
   //             is gated behind the FULL completion (all lessons + final
   //             exam, ≥ 50%) of the previous course in `COURSE_PROGRESSION`.
   //
-  // Flip this to `false` to ship for production.
+  // Keep this `false` in production.
   // =========================================================================
-  const UNLOCK_ALL_COURSES = true; // Set to false to restore course prerequisites
+  const UNLOCK_ALL_COURSES = false; // Set to false to restore course prerequisites
 
   const [hasMounted, setHasMounted] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
@@ -217,7 +232,7 @@ export default function CoursesPage() {
   // Sequential-unlock state ------------------------------------------------
   const [unlockedMap, setUnlockedMap] =
     useState<Record<number, boolean>>(DEFAULT_UNLOCKED);
-  const [, setProgressLoading] = useState(true);
+  const [progressLoading, setProgressLoading] = useState(true);
 
   // Component did mount → safe to apply dynamic classes
   useEffect(() => {
@@ -239,12 +254,18 @@ export default function CoursesPage() {
   // -------------------------------------------------------------------------
   // FETCH QUIZ RESULTS → compute sequential-unlock map
   //
-  // Silent on any failure: if we can't read the results, we fall back to
-  // showing every course as unlocked, matching the pre-refactor behaviour
-  // and avoiding a hard "stuck locked" state for the user.
+  // The initial `unlockedMap` state is PESSIMISTIC (see DEFAULT_UNLOCKED
+  // above), so until this effect resolves, only Course 1 is shown as
+  // unlocked and every subsequent course is shown as locked. This
+  // prevents any "unlocked → locked" flash on the first paint.
   //
-  // When UNLOCK_ALL_COURSES is true, the fetch still runs (so the state
-  // stays consistent) but its result is ignored at render time.
+  // On a fetch failure or when the user is signed out, we keep the
+  // pessimistic default so the page never briefly claims everything is
+  // unlocked. Once a real response arrives, the map is replaced with
+  // the computed chain state.
+  //
+  // When UNLOCK_ALL_COURSES is true, the fetch still runs (so the
+  // state stays consistent) but its result is ignored at render time.
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!hasMounted) return;
@@ -260,7 +281,7 @@ export default function CoursesPage() {
         if (cancelled) return;
 
         if (!user) {
-          // No authenticated user — keep the permissive default.
+          // No authenticated user — keep the pessimistic default.
           setUnlockedMap(DEFAULT_UNLOCKED);
           return;
         }
@@ -277,7 +298,7 @@ export default function CoursesPage() {
 
         if (error) {
           console.warn(
-            '[Courses] quiz_results fetch error — using permissive default:',
+            '[Courses] quiz_results fetch error — using pessimistic default:',
             error.message
           );
           setUnlockedMap(DEFAULT_UNLOCKED);
@@ -442,6 +463,13 @@ export default function CoursesPage() {
             // TESTING BYPASS — when UNLOCK_ALL_COURSES is true, every course
             // is treated as unlocked. Restore production behavior by setting
             // the flag to `false` at the top of the component.
+            //
+            // INSTANT LOCK STATE — the `unlockedMap` state starts PESSIMISTIC
+            // (only Course 1 unlocked). This means the very first render
+            // already shows Courses 2-4 as locked, and they only ever flip
+            // to unlocked if the `quiz_results` fetch confirms the student
+            // has completed every previous course. There is no
+            // "unlocked → locked" flash.
             // -----------------------------------------------------------------
             const isLocked = UNLOCK_ALL_COURSES
               ? false
