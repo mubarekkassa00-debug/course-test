@@ -873,19 +873,58 @@ function generateCertificatePdf(opts: {
       drawDiamond(34, PAGE_H - 34, 5);
       drawDiamond(PAGE_W - 34, PAGE_H - 34, 5);
 
-      const sealCY = 95;
-      const sealR = 42;
-      doc.circle(cx, sealCY, sealR).lineWidth(2).strokeColor(GOLD).stroke();
-      doc.circle(cx, sealCY, sealR - 6).lineWidth(0.75).strokeColor(DARK_GREEN).stroke();
-      doc.circle(cx, sealCY, sealR - 12).lineWidth(0.5).strokeColor(GOLD).stroke();
+      // ---------------------------------------------------------------------
+      // Top logo — replaces the previously drawn circular badge
+      //
+      // When `public/logo.png` exists, it is rendered centered horizontally
+      // at the top of the certificate, occupying the same visual footprint
+      // as the old concentric-circle badge (y ≈ 95, ~110pt tall).
+      //
+      // If the file is missing or unreadable, `loadPublicImage` returns
+      // `null` and we fall back to drawing the original decorative badge
+      // (concentric circles + corner diamonds + "BASIRA" text) so the
+      // certificate always renders correctly.
+      // ---------------------------------------------------------------------
+      const logoBuffer = loadPublicImage('logo.png');
+      let logoDrawn = false;
 
-      drawDiamond(cx, sealCY - sealR, 3.5);
-      drawDiamond(cx + sealR, sealCY, 3.5);
-      drawDiamond(cx, sealCY + sealR, 3.5);
-      drawDiamond(cx - sealR, sealCY, 3.5);
+      if (logoBuffer) {
+        const logoBoxW = 110;
+        const logoBoxH = 110;
+        const logoBoxX = cx - logoBoxW / 2;
+        const logoBoxY = 40; // centered vertically at y ≈ 95 (matches old badge)
 
-      doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(14)
-        .text('BASIRA', cx - 45, sealCY - 10, { width: 90, align: 'center' });
+        try {
+          doc.image(logoBuffer, logoBoxX, logoBoxY, {
+            fit: [logoBoxW, logoBoxH],
+            align: 'center',
+            valign: 'center',
+          });
+          logoDrawn = true;
+        } catch (logoErr) {
+          console.warn(
+            '[generate-certificate] Failed to embed logo image:',
+            logoErr instanceof Error ? logoErr.message : String(logoErr)
+          );
+        }
+      }
+
+      if (!logoDrawn) {
+        // ---- Original drawn circular badge (fallback only) ----
+        const sealCY = 95;
+        const sealR = 42;
+        doc.circle(cx, sealCY, sealR).lineWidth(2).strokeColor(GOLD).stroke();
+        doc.circle(cx, sealCY, sealR - 6).lineWidth(0.75).strokeColor(DARK_GREEN).stroke();
+        doc.circle(cx, sealCY, sealR - 12).lineWidth(0.5).strokeColor(GOLD).stroke();
+
+        drawDiamond(cx, sealCY - sealR, 3.5);
+        drawDiamond(cx + sealR, sealCY, 3.5);
+        drawDiamond(cx, sealCY + sealR, 3.5);
+        drawDiamond(cx - sealR, sealCY, 3.5);
+
+        doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(14)
+          .text('BASIRA', cx - 45, sealCY - 10, { width: 90, align: 'center' });
+      }
 
       doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(32)
         .text('CERTIFICATE', 0, 158, { align: 'center', width: PAGE_W });
