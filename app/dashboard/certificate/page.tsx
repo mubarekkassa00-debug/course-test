@@ -558,9 +558,16 @@ export default function CertificatePage() {
       <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-slate-200/60 dark:border-slate-800/60 shadow-sm">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20 flex-shrink-0">
-              <GraduationCap className="h-6 w-6 text-white" />
-            </div>
+            {/* ---------- Header brand logo ---------- */}
+            {/* Replaces the previous GraduationCap icon with the brand
+                logo, wrapped in the same rounded container for visual
+                consistency. `object-contain` preserves aspect ratio and
+                `rounded-xl` clips the image to match the original tile. */}
+            <img
+              src="/logo.png"
+              alt="Basira Logo"
+              className="h-9 w-9 object-contain rounded-xl"
+            />
             <div className="min-w-0">
               <h1 className="text-base sm:text-lg font-extrabold tracking-tight truncate bg-gradient-to-r from-emerald-600 to-emerald-800 dark:from-emerald-300 dark:to-emerald-500 bg-clip-text text-transparent">
                 የኔ ሰርቲፊኬት
@@ -892,7 +899,7 @@ export default function CertificatePage() {
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
-              የቴሌግራም ቻናላችንን ይቀላቀሉ
+              የቴሌግራም ቻናላችንን ይቀላልቀሉ
             </h3>
           </div>
           <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
