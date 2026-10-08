@@ -7,7 +7,6 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import {
   ArrowLeft,
-  Award,
   BookOpen,
   CheckCircle2,
   Circle,
@@ -753,9 +752,9 @@ export default function CertificatePage() {
                       positioned in the bottom-right corner of this frame. */}
                   <div className="relative rounded-xl border border-amber-300/70 dark:border-amber-800/50 bg-white/70 dark:bg-slate-900/60 backdrop-blur-sm px-5 py-8 sm:px-10 sm:py-12 text-center">
                     {/* ---------- Brand logo ---------- */}
-                    {/* Replaces the previous Award icon at the top of the
-                        certificate. The image is loaded from the public
-                        folder so it can be updated without touching code. */}
+                    {/* Clean, single logo at the top center of the
+                        certificate. Loaded from the public folder so it
+                        can be swapped without touching any code. */}
                     <img
                       src="/logo-transparent.png"
                       alt="Basira Logo"
