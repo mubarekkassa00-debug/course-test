@@ -752,10 +752,15 @@ export default function CertificatePage() {
                   {/* NOTE: `relative` added so the seal can be absolutely
                       positioned in the bottom-right corner of this frame. */}
                   <div className="relative rounded-xl border border-amber-300/70 dark:border-amber-800/50 bg-white/70 dark:bg-slate-900/60 backdrop-blur-sm px-5 py-8 sm:px-10 sm:py-12 text-center">
-                    {/* Award icon */}
-                    <div className="mx-auto mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-600 shadow-lg shadow-amber-900/25">
-                      <Award className="h-10 w-10 text-white" />
-                    </div>
+                    {/* ---------- Brand logo ---------- */}
+                    {/* Replaces the previous Award icon at the top of the
+                        certificate. The image is loaded from the public
+                        folder so it can be updated without touching code. */}
+                    <img
+                      src="/logo-transparent.png"
+                      alt="Basira Logo"
+                      className="h-16 w-16 object-contain mx-auto mb-3"
+                    />
 
                     <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.25em] text-emerald-700 dark:text-emerald-400 mb-3">
                       የባሲራ ትምህርት ማጠናቀቂያ
