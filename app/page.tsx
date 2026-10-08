@@ -136,7 +136,7 @@ const translations = {
         {
           question: 'What is the course fee?',
           answer:
-            'To ensure high quality and platform maintenance, our courses are offered at a very nominal and affordable fee of only 200 ETB. This includes lifetime access to learning materials and a verified certificate.',
+            'To ensure high quality and platform maintenance, our courses are offered at a very nominal and affordable fee of only 250 ETB. This includes lifetime access to learning materials and a verified certificate.',
         },
         {
           question: 'Can I study using my mobile phone?',
@@ -282,7 +282,7 @@ const translations = {
         {
           question: 'የትምህርቱ ክፍያ ስንት ነው?',
           answer:
-            'የባሲራ ትምህርቶች ከፍተኛ ጥራት ያላቸው ሆኖ ሳለ፣ የፕላትፎርሙን የቴክኖሎጂ ጥገናና ቀጣይነት ያለው አገልግሎት ለማስቀጠል ሲባል በጣም አነስተኛ እና ምቹ በሆነ የ 200 ብር ብቻ ክፍያ የቀረበ ነው። ይህ ክፍያ ሙሉ የትምህርት ቁሳቁሶችን እና የማጠናቀቂያ ሰርቲፊኬትን ያካትታል።',
+            'የባሲራ ትምህርቶች ከፍተኛ ጥራት ያላቸው ሆኖ ሳለ፣ የፕላትፎርሙን የቴክኖሎጂ ጥገናና ቀጣይነት ያለው አገልግሎት ለማስቀጠል ሲባል በጣም አነስተኛ እና ምቹ በሆነ የ 250 ብር ብቻ ክፍያ የቀረበ ነው። ይህ ክፍያ ሙሉ የትምህርት ቁሳቁሶችን እና የማጠናቀቂያ ሰርቲፊኬትን ያካትታል።',
         },
         {
           question: 'በስልክ መከታተል ይቻላል?',
