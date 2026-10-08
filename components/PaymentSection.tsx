@@ -70,7 +70,7 @@ type UIState = 'loading' | 'idle' | 'uploading' | 'pending' | 'approved' | 'reje
 // Constants
 // ---------------------------------------------------------------------------
 
-const PAYMENT_AMOUNT_ETB = 200;
+const PAYMENT_AMOUNT_ETB = 250;
 const RECEIPTS_BUCKET = 'receipts';
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 
