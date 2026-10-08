@@ -876,16 +876,20 @@ function generateCertificatePdf(opts: {
       // ---------------------------------------------------------------------
       // Top logo — replaces the previously drawn circular badge
       //
-      // When `public/logo.png` exists, it is rendered centered horizontally
-      // at the top of the certificate, occupying the same visual footprint
-      // as the old concentric-circle badge (y ≈ 95, ~110pt tall).
+      // When `public/logo-transparent.png` exists, it is rendered centered
+      // horizontally at the top of the certificate, occupying the same
+      // visual footprint as the old concentric-circle badge (y ≈ 95,
+      // ~110pt tall).
+      //
+      // The file is the background-removed version of the logo, so PDFKit
+      // renders it via its alpha channel with no black background box.
       //
       // If the file is missing or unreadable, `loadPublicImage` returns
       // `null` and we fall back to drawing the original decorative badge
       // (concentric circles + corner diamonds + "BASIRA" text) so the
       // certificate always renders correctly.
       // ---------------------------------------------------------------------
-      const logoBuffer = loadPublicImage('logo.png');
+      const logoBuffer = loadPublicImage('logo-transparent.png');
       let logoDrawn = false;
 
       if (logoBuffer) {
