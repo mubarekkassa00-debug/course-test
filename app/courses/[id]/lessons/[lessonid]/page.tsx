@@ -76,31 +76,15 @@ const PASS_THRESHOLD_PERCENT = 50;
 
 // ---------------------------------------------------------------------------
 // FREE TRIAL / PAYMENT GATE
-//
-// Lessons 1, 2 and 3 are part of the 3-day free trial — one lesson per
-// day, matching the drip-lock cadence. Lesson 4 onward (and the final
-// exam) require an approved payment (`payments.status === 'approved'`).
-//
-// If an unpaid student lands on a lesson beyond the trial window, we
-// block playback and surface a payment-required modal.
 // ---------------------------------------------------------------------------
 const FREE_TRIAL_LESSON_COUNT = 3;
 
 // ---------------------------------------------------------------------------
 // FINAL EXAM CONSTANTS & HELPERS
 // ---------------------------------------------------------------------------
-
-/** Sentinel `lesson_id` used to store the final-exam result in `quiz_results`. */
 const FINAL_EXAM_LESSON_ID = 999;
-
-/** Hard cap on final-exam question count (slice after shuffle). */
 const MAX_FINAL_EXAM_QUESTIONS = 30;
 
-/**
- * Synthetic lesson object used so the rest of the UI can render the
- * final exam route through the exact same code path as regular lessons.
- * No images, no audio — the quiz gate opens immediately.
- */
 const FINAL_EXAM_LESSON: Lesson = {
   id: 'final',
   lessonNumber: FINAL_EXAM_LESSON_ID,
@@ -109,12 +93,6 @@ const FINAL_EXAM_LESSON: Lesson = {
   audioUrl: '',
 };
 
-/**
- * Detect whether a lesson slug refers to the final exam.
- * Accepts common variants (case-insensitive):
- *   final, final-exam, final_exam, finalexam,
- *   certificate, certificate-exam, certificate_exam
- */
 function isFinalExamSlug(slug: string): boolean {
   const s = (slug || '').toLowerCase().trim();
   return (
@@ -128,10 +106,6 @@ function isFinalExamSlug(slug: string): boolean {
   );
 }
 
-/**
- * Fisher–Yates (Knuth) shuffle — produces a new array; does not mutate input.
- * Uses the modern descending-index variant with a uniform random swap.
- */
 function fisherYatesShuffle<T>(input: T[]): T[] {
   const arr = input.slice();
   for (let i = arr.length - 1; i > 0; i--) {
@@ -143,18 +117,6 @@ function fisherYatesShuffle<T>(input: T[]): T[] {
   return arr;
 }
 
-/**
- * Compute the LOCAL (1-based) lesson number within a course.
- * Course lesson numbers are stored as global values:
- *   • usul       → 1..11
- *   • arbain     → 101..111
- *   • shurut     → 1..7
- *   • urjuzetul  → 201..225
- *   • final exam → 999  (sentinel, returns null)
- *
- * `% 100` normalises them all to 1..N. Returns null for the final exam
- * and any non-positive / non-finite values.
- */
 function getLocalLessonNumber(
   lessonNumber: number | undefined | null
 ): number | null {
@@ -1116,20 +1078,8 @@ export default function LessonPage() {
 
   // =========================================================================
   // TESTING TOGGLE — UNLOCK ALL LESSONS
-  //
-  //   `true`  → bypasses the payment gate AND the audio-finish gate AND the
-  //             post-pass retake lock, so every lesson's content and quiz
-  //             become immediately reachable for testing. Real scores are
-  //             still read from `quiz_results` and shown in the header badge.
-  //
-  //   `false` → restores the original production behavior 100%:
-  //               • Lessons 4+ require an `approved` payment.
-  //               • The quiz tab unlocks only after the audio finishes.
-  //               • A passed quiz can no longer be retaken.
-  //
-  // Flip this to `false` to ship for production.
   // =========================================================================
-  const UNLOCK_ALL_LESSONS = true; // Set to false to restore original lesson lock
+  const UNLOCK_ALL_LESSONS = false; // Set to false to restore original lesson lock
 
   // ------------------------------------------------------------------
   // PARAM RESOLUTION (client component → useParams, synchronous)
@@ -1179,11 +1129,6 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // FINAL EXAM DETECTION
-  //
-  // If the slug isn't a regular lesson, check whether it's one of the
-  // accepted final-exam aliases. If so, use a synthetic lesson object
-  // (stable module-level reference) so the rest of the UI renders
-  // through the exact same code path.
   // ------------------------------------------------------------------
   const isFinalExam = !foundLesson && isFinalExamSlug(currentLessonId);
 
@@ -1217,31 +1162,13 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // PAYMENT GATE STATE
-  //
-  //   isPaid          → true only when the latest `payments` row for
-  //                     this user has status === 'approved'.
-  //   paymentLoading  → true while the payment check is in flight.
-  //                     While loading, we deliberately do NOT show the
-  //                     payment modal — this avoids a lock flash for
-  //                     trial or paid students on first paint.
-  //   showPaymentModal → controls the modal visibility. Auto-opened
-  //                     when a payment-required lesson is opened.
   // ------------------------------------------------------------------
   const [isPaid, setIsPaid] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(true);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // ------------------------------------------------------------------
-  // RETAKE LOCK — derived from the previously saved score.
-  //
-  //   hasPassedBefore → the student already earned >= 50% on this quiz.
-  //                     The quiz UI must be LOCKED (read-only) and the
-  //                     submit button must not be shown.
-  //   hasFailedBefore → the student previously scored < 50%. The quiz
-  //                     stays fully unlocked so they can retake it.
-  //
-  // When UNLOCK_ALL_LESSONS is true, `hasPassedBefore` is forced to
-  // `false` so a passed quiz can be retaken during testing.
+  // RETAKE LOCK
   // ------------------------------------------------------------------
   const realHasPassedBefore =
     savedScore !== null &&
@@ -1274,10 +1201,6 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // PAYMENT STATUS FETCH (for the free-trial gate)
-  //
-  // A failure is non-fatal: `isPaid` remains false, and lessons 1–3
-  // still work as free-trial content, while lessons 4+ show the
-  // payment-required modal.
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!hasMounted) return;
@@ -1336,53 +1259,34 @@ export default function LessonPage() {
   }, [hasMounted]);
 
   // ------------------------------------------------------------------
-  // LOCAL LESSON NUMBER + PAYMENT REQUIREMENT
-  //
-  //   localLessonNumber → 1-based lesson index within the course
-  //                       (e.g. lesson-4 of usul → 4; arbaeen-lesson-4
-  //                       has lessonNumber 104 → % 100 → 4).
-  //                       null for the final exam and for any
-  //                       non-numeric lesson numbers.
-  //
-  //   requiresPayment   → true when the student is unpaid AND the
-  //                       lesson is beyond the free-trial window
-  //                       (lesson 4+) OR the final exam.
-  //
-  // While `paymentLoading` is true we return false so trial/paid users
-  // never briefly see the payment modal before the check resolves.
-  //
-  // When UNLOCK_ALL_LESSONS is true, the payment gate is bypassed
-  // entirely so lessons 4+ and the final exam are immediately accessible.
+  // LOCAL LESSON NUMBER + PAYMENT REQUIREMENT (pessimistic during load)
   // ------------------------------------------------------------------
   const localLessonNumber = lesson ? getLocalLessonNumber(lesson.lessonNumber) : null;
 
+  const isPaymentWindowLesson =
+    isFinalExam ||
+    (localLessonNumber !== null &&
+      localLessonNumber > FREE_TRIAL_LESSON_COUNT);
+
   const realRequiresPayment =
-    !paymentLoading &&
-    !isPaid &&
-    (isFinalExam ||
-      (localLessonNumber !== null &&
-        localLessonNumber > FREE_TRIAL_LESSON_COUNT));
+    isPaymentWindowLesson &&
+    (paymentLoading || !isPaid);
 
   const requiresPayment = UNLOCK_ALL_LESSONS
     ? false
     : realRequiresPayment;
 
-  // Auto-open the payment modal whenever the student lands on a
-  // payment-required lesson. Auto-close it if the requirement is
-  // lifted (e.g. after the payment fetch resolves as approved).
+  // Auto-open the payment modal once the payment check has resolved.
   useEffect(() => {
-    if (requiresPayment) {
+    if (requiresPayment && !paymentLoading) {
       setShowPaymentModal(true);
     } else {
       setShowPaymentModal(false);
     }
-  }, [requiresPayment]);
+  }, [requiresPayment, paymentLoading]);
 
   // ------------------------------------------------------------------
   // Fetch previously saved score from `quiz_results` on lesson change.
-  //
-  // For the final exam we use the sentinel `lesson_id = 999` so its
-  // row stays distinct from any regular lesson (1..25).
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!lesson) {
@@ -1410,7 +1314,6 @@ export default function LessonPage() {
           return;
         }
 
-        // For the final exam, store/read a distinct sentinel lesson_id.
         const lessonNum = isFinalExam
           ? FINAL_EXAM_LESSON_ID
           : parseLessonNumber(lesson.lessonNumber, currentLessonId);
@@ -1458,13 +1361,6 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // Fetch quiz questions from the correct dynamic table.
-  //
-  // • Regular lesson → filter by that specific `lesson_number` /
-  //   `lesson_id` (unchanged behavior).
-  //
-  // • Final exam     → fetch ALL questions for the course table,
-  //   Fisher–Yates shuffle, then slice to at most
-  //   MAX_FINAL_EXAM_QUESTIONS (30).
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!lesson) return;
@@ -1497,11 +1393,6 @@ export default function LessonPage() {
           return;
         }
 
-        // -------------------------------------------------------------
-        // FINAL EXAM — fetch ALL rows from the course table,
-        // Fisher–Yates shuffle, then slice to MAX_FINAL_EXAM_QUESTIONS.
-        // No `.eq(lesson_number / lesson_id, ...)` filter is applied.
-        // -------------------------------------------------------------
         if (isFinalExam) {
           console.log(
             `Fetching FINAL EXAM | table=${tableName} | (all rows, shuffle, slice ${MAX_FINAL_EXAM_QUESTIONS})`
@@ -1530,7 +1421,6 @@ export default function LessonPage() {
             return;
           }
 
-          // Shuffle the full set, then take at most 30.
           const shuffled = fisherYatesShuffle(allRows as any[]);
           const selected = shuffled.slice(0, MAX_FINAL_EXAM_QUESTIONS);
 
@@ -1543,9 +1433,6 @@ export default function LessonPage() {
           return;
         }
 
-        // -------------------------------------------------------------
-        // REGULAR LESSON — filter by lesson_number / lesson_id (unchanged).
-        // -------------------------------------------------------------
         const lessonColumn = getLessonColumnName(tableName);
 
         const targetLessonNumber = parseLessonNumber(
@@ -1607,7 +1494,6 @@ export default function LessonPage() {
   const handleAudioEnded = () => {
     if (isAudioFinished) return; // idempotent
     if (requiresPayment) {
-      // Defensive: block the unlock path if payment is required.
       setShowPaymentModal(true);
       return;
     }
@@ -1635,30 +1521,16 @@ export default function LessonPage() {
     questionId: string | number,
     optionText: string
   ) => {
-    // Block any interaction if the quiz has been submitted OR the
-    // student has already passed the quiz before.
     if (quizSubmitted || submittingQuiz || hasPassedBefore) return;
     setSelectedAnswers((prev) => ({ ...prev, [String(questionId)]: optionText }));
   };
 
   // ------------------------------------------------------------------
   // Submit → save score to `quiz_results` via upsert.
-  //
-  // onConflict target: (user_id, course_id, lesson_id)
-  //
-  // For the final exam, `lesson_id = FINAL_EXAM_LESSON_ID` (999) so it
-  // stays distinct from any regular lesson row.
-  //
-  // The payload now ALSO includes:
-  //   • course_slug   → the current course identifier from the URL
-  //                     (e.g. "1", "arbain", "usul", ...)
-  //   • is_final_exam → true for the final-exam route, false for
-  //                     regular lesson quizzes
   // ------------------------------------------------------------------
   const handleSubmitQuiz = async () => {
     if (!questions.length || !lesson || submittingQuiz) return;
 
-    // Hard guard: a passed quiz cannot be retaken.
     if (hasPassedBefore) return;
 
     setSubmittingQuiz(true);
@@ -1674,7 +1546,6 @@ export default function LessonPage() {
     setScore(correctCount);
     setQuizSubmitted(true);
 
-    // Optimistically update the header badge.
     setSavedScore({ score: correctCount, total, percentage });
 
     try {
@@ -1698,13 +1569,10 @@ export default function LessonPage() {
         return;
       }
 
-      // Final exam uses the sentinel lesson_id.
       const lessonNum = isFinalExam
         ? FINAL_EXAM_LESSON_ID
         : parseLessonNumber(lesson.lessonNumber, currentLessonId);
 
-      // Derive the current course slug from the URL params, with a
-      // safe fallback to the canonical slug if params.id is missing.
       const courseSlug: string = courseId || canonicalSlug;
 
       const { error } = await supabase.from('quiz_results').upsert(
@@ -1732,16 +1600,6 @@ export default function LessonPage() {
 
   // ------------------------------------------------------------------
   // Quiz navigation
-  //
-  // `goToQuiz` also works for lessons without audio (including the
-  // final exam): if there is no audio, the audio gate is bypassed and
-  // the quiz tab unlocks immediately.
-  //
-  // PAYMENT GATE — if the current lesson requires payment, the quiz
-  // is not reachable; we surface the modal instead.
-  //
-  // When UNLOCK_ALL_LESSONS is true, the audio-finish requirement is
-  // treated as satisfied so the quiz is reachable immediately.
   // ------------------------------------------------------------------
   const goToQuiz = () => {
     if (!lesson) return;
@@ -1749,8 +1607,6 @@ export default function LessonPage() {
       setShowPaymentModal(true);
       return;
     }
-    // If the lesson has audio, keep the strict audio-finish gate
-    // (bypassed when UNLOCK_ALL_LESSONS is true).
     if (lesson.audioUrl && !isAudioFinished && !UNLOCK_ALL_LESSONS) return;
     setIsAudioFinished(true);
     setIsQuizUnlocked(true);
@@ -1767,14 +1623,13 @@ export default function LessonPage() {
   const prevImage = () =>
     lesson && setCurrentImg((prev) => Math.max(prev - 1, 0));
 
-  // Strict question navigation guard.
   const currentQuestion = questions[currentStep];
   const currentQuestionId = currentQuestion ? String(currentQuestion.id) : '';
   const hasAnsweredCurrent =
     !!currentQuestionId && !!selectedAnswers[currentQuestionId];
 
   const nextStep = () => {
-    if (!hasAnsweredCurrent) return; // hard guard
+    if (!hasAnsweredCurrent) return;
     if (currentStep < questions.length - 1) {
       setCurrentStep((prev) => prev + 1);
     } else {
@@ -1813,8 +1668,6 @@ export default function LessonPage() {
   const quizAvailable = questions.length > 0;
   const totalImages = lesson.images.length;
 
-  // Computed audio/quiz gate state used by the UI. When
-  // UNLOCK_ALL_LESSONS is true, both gates are treated as open.
   const uiAudioFinished = UNLOCK_ALL_LESSONS ? true : isAudioFinished;
   const uiQuizUnlocked = UNLOCK_ALL_LESSONS ? true : isQuizUnlocked;
 
@@ -1861,7 +1714,6 @@ export default function LessonPage() {
             <h1 className="text-base font-bold text-white truncate">
               {lesson.title}
             </h1>
-            {/* Show previously saved score from quiz_results */}
             {savedScore && (
               <div
                 className={[
@@ -1965,13 +1817,6 @@ export default function LessonPage() {
             )}
 
           <div className="flex-shrink-0 p-3 bg-slate-900 border-t border-slate-800">
-            {/* =========================================================
-                PAYMENT GATE — when the student is unpaid and the lesson
-                is beyond the free-trial window, replace the audio player
-                and quiz CTA with a locked prompt that opens the modal.
-                The audio element is intentionally NOT rendered so the
-                track cannot be played or downloaded.
-            ========================================================= */}
             {requiresPayment ? (
               <div className="rounded-xl border border-amber-700/70 bg-amber-950/40 p-4 text-center">
                 <div className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-amber-900/60">
@@ -1986,22 +1831,17 @@ export default function LessonPage() {
                 <button
                   type="button"
                   onClick={() => setShowPaymentModal(true)}
-                  className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
+                  disabled={paymentLoading}
+                  className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-bold"
                 >
                   <CreditCard className="h-4 w-4" />
-                  ክፍያ ይፈጽሙ
+                  {paymentLoading ? 'በመፈተሽ ላይ...' : 'ክፍያ ይፈጽሙ'}
                 </button>
               </div>
             ) : (
               <>
                 {lesson.audioUrl ? (
                   <div className="mb-3">
-                    {/*
-                      Audio element with download restrictions:
-                      • controlsList="nodownload"   → removes native download UI
-                      • onContextMenu preventDefault → blocks right-click "Save audio as…"
-                      • No direct download button or link is exposed in the UI
-                    */}
                     <audio
                       ref={audioRef}
                       controls
@@ -2056,9 +1896,6 @@ export default function LessonPage() {
                   </div>
                 )}
 
-                {/* Start Quiz button — gated by isAudioFinished (or absence
-                    of audio). When UNLOCK_ALL_LESSONS is true, the audio
-                    gate is treated as satisfied via `uiAudioFinished`. */}
                 {!loadingQuiz &&
                   quizAvailable &&
                   (uiAudioFinished || !lesson.audioUrl) && (
@@ -2136,14 +1973,6 @@ export default function LessonPage() {
                 {quiz?.title || (isFinalExam ? 'የመጨረሻ ፈተና' : 'የደርሱ ፈተና')}
               </h3>
 
-              {/* ------------------------------------------------
-                  PASSED LOCK — student already cleared 50%
-                  → show a green badge, block the quiz entirely,
-                    keep navigation buttons active.
-
-                  When UNLOCK_ALL_LESSONS is true, `hasPassedBefore`
-                  is forced to `false` so this branch never triggers.
-                 ------------------------------------------------ */}
               {hasPassedBefore && !quizSubmitted ? (
                 <div className="mt-4 flex-1 flex flex-col items-center justify-center text-center gap-4">
                   <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-950 border border-emerald-700 text-emerald-300 text-sm font-semibold">
@@ -2168,10 +1997,6 @@ export default function LessonPage() {
                 </div>
               ) : !quizSubmitted ? (
                 <>
-                  {/* ------------------------------------------------
-                      FAILED retake banner — shown above the quiz
-                      when the student previously scored < 50%.
-                     ------------------------------------------------ */}
                   {hasFailedBefore && (
                     <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-700/70 bg-amber-950/40 px-3 py-2 text-amber-200 text-xs">
                       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
@@ -2279,7 +2104,6 @@ export default function LessonPage() {
               ) : (
                 /* After submission this session — show the result */
                 <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
-                  {/* Green "passed" celebration card if this attempt scored >= 50% */}
                   {score !== null &&
                     questions.length > 0 &&
                     Math.round((score / questions.length) * 100) >=
@@ -2300,7 +2124,6 @@ export default function LessonPage() {
                     %)
                   </p>
 
-                  {/* Passed → explain retake is closed */}
                   {score !== null &&
                     questions.length > 0 &&
                     Math.round((score / questions.length) * 100) >=
@@ -2311,7 +2134,6 @@ export default function LessonPage() {
                       </p>
                     )}
 
-                  {/* Failed → encourage retake */}
                   {score !== null &&
                     questions.length > 0 &&
                     Math.round((score / questions.length) * 100) <
@@ -2341,16 +2163,7 @@ export default function LessonPage() {
         </div>
       )}
 
-      {/* =============================================================== */}
-      {/* PAYMENT-REQUIRED MODAL                                          */}
-      {/*                                                                 */}
-      {/* Rendered when an unpaid student opens a lesson beyond the      */}
-      {/* free-trial window (lesson 4+ or the final exam). Auto-opened   */}
-      {/* on mount and dismissible via the X button or the backdrop.     */}
-      {/*                                                                 */}
-      {/* When UNLOCK_ALL_LESSONS is true, `requiresPayment` is false    */}
-      {/* so this modal never auto-opens.                                 */}
-      {/* =============================================================== */}
+      {/* PAYMENT-REQUIRED MODAL */}
       {showPaymentModal && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center p-4"
@@ -2358,14 +2171,12 @@ export default function LessonPage() {
           aria-modal="true"
           aria-labelledby="payment-modal-title"
         >
-          {/* Backdrop */}
           <div
             className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
             onClick={() => setShowPaymentModal(false)}
             aria-hidden="true"
           />
 
-          {/* Dialog */}
           <div className="relative w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 sm:p-7">
             <button
               type="button"

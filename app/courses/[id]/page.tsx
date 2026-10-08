@@ -83,6 +83,14 @@ const amh = {
   /** Reason line under a payment-locked lesson title. */
   paymentLockReason:
     'የ3 ቀን ነፃ ጊዜዎ አልቋል — ለመቀጠል እባክዎ ክፍያ ይፈጽሙ።',
+
+  // -------------------------------------------------------------------------
+  // Loading-state labels (shown while scores/payment are being fetched)
+  // -------------------------------------------------------------------------
+  /** Neutral badge shown while the lock state is still being resolved. */
+  badgeLoading: '⏳ በመጫን ላይ',
+  /** Reason line shown while the lock state is still being resolved. */
+  loadingLockReason: 'በመጫን ላይ ነው...',
 };
 
 // ---------------------------------------------------------------------------
@@ -501,7 +509,7 @@ export default function CoursePage() {
   //
   // Flip this to `false` to ship for production.
   // =========================================================================
-  const UNLOCK_ALL_LESSONS = true; // Set to false to restore daily locked lessons
+  const UNLOCK_ALL_LESSONS = false; // Set to false to restore daily locked lessons
 
   // -------------------------------------------------------------------------
   // DARK MODE SYNC (globally-scoped on <html>)
@@ -873,17 +881,21 @@ export default function CoursePage() {
   //
   //   • UNLOCK_ALL_LESSONS === true    → always UNLOCKED (testing bypass)
   //   • index === 0                    → always UNLOCKED
+  //   • scores still loading           → LOCKED ('loading', pessimistic)
   //   • previous lesson not yet passed → LOCKED ("complete previous lesson")
   //   • previous lesson passed TODAY   → LOCKED ("come back tomorrow")
   //   • previous lesson passed earlier → UNLOCKED
   //
-  // While `scoresLoading` is true we deliberately treat every lesson as
-  // unlocked so the initial render doesn't briefly flash incorrect lock
-  // states before the fetch completes.
+  // IMPORTANT — PESSIMISTIC LOADING DEFAULT:
+  //   While `scoresLoading` is true, every lesson beyond the first is
+  //   treated as LOCKED. This guarantees that a lesson which the server
+  //   will ultimately mark as locked does not first flash as unlocked on
+  //   the very first render paint. Lesson 1 (index 0) is always unlocked
+  //   by design, so it stays unlocked even during loading.
   // -------------------------------------------------------------------------
   const resolveLock = (
     index: number
-  ): { locked: boolean; reason: 'previous' | 'tomorrow' | null } => {
+  ): { locked: boolean; reason: 'previous' | 'tomorrow' | 'loading' | null } => {
     // -----------------------------------------------------------------
     // TESTING BYPASS — when UNLOCK_ALL_LESSONS is true, no lesson is
     // ever drip-locked. Restore production behavior by setting the flag
@@ -891,8 +903,15 @@ export default function CoursePage() {
     // -----------------------------------------------------------------
     if (UNLOCK_ALL_LESSONS) return { locked: false, reason: null };
 
-    if (scoresLoading) return { locked: false, reason: null };
+    // Lesson 1 (index 0) is always unlocked regardless of data.
     if (index <= 0) return { locked: false, reason: null };
+
+    // -----------------------------------------------------------------
+    // PESSIMISTIC LOADING DEFAULT — prevents the "unlocked → locked"
+    // flash by holding every not-yet-verified lesson in a locked state
+    // until the real `quiz_results` data resolves.
+    // -----------------------------------------------------------------
+    if (scoresLoading) return { locked: true, reason: 'loading' };
 
     const prevLesson = course.lessons[index - 1];
     if (!prevLesson) return { locked: false, reason: null };
@@ -921,21 +940,23 @@ export default function CoursePage() {
   //
   // Precedence of checks:
   //   1. UNLOCK_ALL_LESSONS === true  → UNLOCKED (testing bypass)
-  //   2. Every regular lesson must have a passing record. If even one is
+  //   2. scores still loading         → LOCKED ('loading', pessimistic)
+  //   3. Every regular lesson must have a passing record. If even one is
   //      missing (never passed), the final exam is LOCKED with reason
   //      'allLessons' → "እባክዎን አስቀድመው ሁሉንም ደርሶች ያጠናቅቁ".
-  //   3. If all lessons are passed, check the LAST lesson's earliest pass
+  //   4. If all lessons are passed, check the LAST lesson's earliest pass
   //      date:
   //        • passed TODAY (same calendar day) → LOCKED, reason 'tomorrow'
   //          → "ነገ ይከፈታል (በቀን አንድ ደርስ/ፈተና ብቻ)"
   //        • passed on an earlier day        → UNLOCKED
   //
-  // While `scoresLoading` is true we return unlocked so the initial paint
-  // does not flash incorrect lock states.
+  // IMPORTANT — PESSIMISTIC LOADING DEFAULT:
+  //   While `scoresLoading` is true we return LOCKED ('loading') so the
+  //   final exam card cannot flash as unlocked before the data resolves.
   // -------------------------------------------------------------------------
   const resolveFinalExamLock = (): {
     locked: boolean;
-    reason: 'allLessons' | 'tomorrow' | null;
+    reason: 'allLessons' | 'tomorrow' | 'loading' | null;
   } => {
     // -----------------------------------------------------------------
     // TESTING BYPASS — when UNLOCK_ALL_LESSONS is true, the final exam
@@ -944,7 +965,11 @@ export default function CoursePage() {
     // -----------------------------------------------------------------
     if (UNLOCK_ALL_LESSONS) return { locked: false, reason: null };
 
-    if (scoresLoading) return { locked: false, reason: null };
+    // -----------------------------------------------------------------
+    // PESSIMISTIC LOADING DEFAULT — hold the exam locked until the
+    // real `quiz_results` data resolves so it never flashes unlocked.
+    // -----------------------------------------------------------------
+    if (scoresLoading) return { locked: true, reason: 'loading' };
 
     const lessons = course.lessons;
     if (!lessons || lessons.length === 0) {
@@ -1155,6 +1180,11 @@ export default function CoursePage() {
               //
               // When UNLOCK_ALL_LESSONS is true, `resolveLock` always
               // returns `{ locked: false }`, so `dripLocked` is false.
+              //
+              // During `scoresLoading`, `resolveLock` returns a
+              // pessimistic `{ locked: true, reason: 'loading' }` for
+              // every lesson beyond the first, preventing the
+              // "unlocked → locked" flash.
               // ---------------------------------------------------------
               const lock = resolveLock(idx);
               const dripLocked = lock.locked;
@@ -1168,18 +1198,20 @@ export default function CoursePage() {
               //   Lessons 1–3  → part of the 3-day free trial.
               //   Lessons 4+   → require an approved payment.
               //
-              // When UNLOCK_ALL_LESSONS is true, the payment gate is
-              // bypassed entirely so lessons 4+ remain reachable.
-              //
-              // While `paymentLoading` is true we treat the user as
-              // "not payment-locked" so trial users don't briefly see a
-              // lock flash before the payment check resolves.
+              // PESSIMISTIC LOADING DEFAULT:
+              //   While `paymentLoading` is true we treat the user as
+              //   "possibly unpaid", so lessons 4+ are shown as
+              //   payment-locked during loading. Once the payment check
+              //   resolves:
+              //     • paid   → the lesson unlocks (softer unlock-flash)
+              //     • unpaid → the lesson stays locked (no flash)
+              //   This prevents a lesson that will ultimately be
+              //   payment-locked from first flashing as unlocked.
               // ---------------------------------------------------------
               const requiresPayment =
                 !UNLOCK_ALL_LESSONS &&
-                !paymentLoading &&
-                !isPaid &&
-                lessonNumber > FREE_TRIAL_LESSON_COUNT;
+                lessonNumber > FREE_TRIAL_LESSON_COUNT &&
+                (paymentLoading || !isPaid);
 
               const paymentLocked = !dripLocked && requiresPayment;
 
@@ -1189,6 +1221,7 @@ export default function CoursePage() {
               // ---------------------------------------------------------
               // STATUS BADGE — small inline pill next to the title.
               //
+              //   0. While loading                  → "⏳ በመጫን ላይ"
               //   1. Lessons 1–3 unlocked           → "▶️ ነፃ ደርስ"
               //   2. Any future-day (locked) lesson → "⏳ ነገ ይከፈታል"
               //   3. Lessons 4+ unpaid + arrived    → "🔒 ክፍያ ይፈልጋል"
@@ -1200,7 +1233,14 @@ export default function CoursePage() {
               // ---------------------------------------------------------
               let badge: { label: string; className: string } | null = null;
 
-              if (dripLocked) {
+              if (dripLocked && lock.reason === 'loading') {
+                // Pessimistic loading badge — neutral, non-committal.
+                badge = {
+                  label: amh.badgeLoading,
+                  className:
+                    'bg-slate-100 text-slate-600 border-slate-200/80 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700/60',
+                };
+              } else if (dripLocked) {
                 // Future day → unlocks tomorrow.
                 badge = {
                   label: amh.badgeUnlocksTomorrow,
@@ -1275,7 +1315,7 @@ export default function CoursePage() {
                         {lesson.title}
                       </p>
 
-                      {/* Status badge (free trial / tomorrow / payment) */}
+                      {/* Status badge (loading / free trial / tomorrow / payment) */}
                       {badge && (
                         <span
                           className={[
@@ -1308,7 +1348,9 @@ export default function CoursePage() {
                       <p className="mt-1 text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 flex items-start gap-1.5 leading-snug">
                         <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
                         <span>
-                          {lock.reason === 'tomorrow'
+                          {lock.reason === 'loading'
+                            ? amh.loadingLockReason
+                            : lock.reason === 'tomorrow'
                             ? amh.comeBackTomorrow
                             : amh.completePrevious}
                         </span>
@@ -1370,6 +1412,7 @@ export default function CoursePage() {
             //
             // DRIP-LOCK (final exam):
             //   • UNLOCK_ALL_LESSONS === true → always UNLOCKED
+            //   • scores still loading        → LOCKED ('loading')
             //   • Not all regular lessons passed → LOCKED ('allLessons')
             //   • All passed but last passed today → LOCKED ('tomorrow')
             //   • All passed and last passed earlier → UNLOCKED
@@ -1441,7 +1484,9 @@ export default function CoursePage() {
                     <p className="mt-1 text-[11px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 flex items-start gap-1.5 leading-snug">
                       <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
                       <span>
-                        {finalLock.reason === 'tomorrow'
+                        {finalLock.reason === 'loading'
+                          ? amh.loadingLockReason
+                          : finalLock.reason === 'tomorrow'
                           ? amh.comeBackTomorrowExam
                           : amh.completeAllLessons}
                       </span>
