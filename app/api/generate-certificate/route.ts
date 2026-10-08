@@ -934,8 +934,10 @@ function generateCertificatePdf(opts: {
       // ---------------------------------------------------------------------
       // Digital signature — embedded from `public/signature.png`
       //
-      // Rendered larger so it is clearly visible above the signature line.
-      // Uses the fixed dimensions requested: 180×65pt box at (cx - 90, 405).
+      // The signature is centered horizontally on the page by anchoring a
+      // fixed-width box on `cx` and using `align: 'center'` inside the box.
+      // This guarantees perfect centering above the "Authorized Signature"
+      // rule line regardless of the source PNG's aspect ratio.
       //
       // PDFKit preserves the PNG's alpha channel, so a correctly-authored
       // transparent PNG renders cleanly with no background box.
@@ -949,11 +951,17 @@ function generateCertificatePdf(opts: {
 
       const signatureBuffer = loadPublicImage('signature.png');
       if (signatureBuffer) {
+        // Box is centered on `cx`: left edge = cx - (boxW / 2).
+        const sigBoxW = 220;
+        const sigBoxH = 65;
+        const sigBoxX = cx - sigBoxW / 2;
+        const sigBoxY = 405;
+
         try {
-          doc.image(signatureBuffer, cx - 90, 405, {
-            width: 180,
-            height: 65,
-            fit: [180, 65],
+          doc.image(signatureBuffer, sigBoxX, sigBoxY, {
+            fit: [sigBoxW, sigBoxH],
+            align: 'center',
+            valign: 'center',
           });
         } catch (sigErr) {
           console.warn(
