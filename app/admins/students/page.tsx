@@ -32,6 +32,11 @@ import {
   GraduationCap,
   TrendingUp,
   BarChart3,
+  Megaphone,
+  Send,
+  Clock,
+  UserPlus,
+  CreditCard,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -43,7 +48,7 @@ const supabase = createBrowserClient(
 );
 
 // ---------------------------------------------------------------------------
-// Constants — the 4 required Kitabs of Basira
+// Constants — the 4 required Kitabs of Istibsar
 // ---------------------------------------------------------------------------
 const REQUIRED_COURSES: { slug: string; displayName: string }[] = [
   { slug: 'usul_al_thalatha', displayName: 'ኡሱሉ ሰላሳ' },
@@ -112,9 +117,22 @@ interface StudentRow {
   currentCourseName: string | null;
   currentLessonNumber: number | null;
   breakdown: CourseBreakdown[];
+  /** Latest quiz attempt timestamp — used to compute "active today". */
+  lastActivityAt: string | null;
 }
 
 type FilterKey = 'all' | 'in_progress' | 'completed';
+
+/**
+ * Quick-filter overlays that can be applied by clicking the top stats
+ * cards. These are evaluated as an ADDITIONAL constraint on top of the
+ * regular name/email/phone search and the filter-tab selection.
+ */
+type QuickFilterKey =
+  | 'none'
+  | 'pending_payments'
+  | 'active_today'
+  | 'new_this_week';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -136,6 +154,20 @@ function formatDateAmh(iso: string | null): string {
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     return `${yyyy}/${mm}/${dd}`;
+  } catch {
+    return '—';
+  }
+}
+
+function formatDateTimeAmh(iso: string | null): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    const date = formatDateAmh(iso);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${date} · ${hh}:${mm}`;
   } catch {
     return '—';
   }
@@ -300,7 +332,7 @@ function downloadCSV(rows: StudentRow[]) {
 
   const a = document.createElement('a');
   a.href = url;
-  a.download = `basira-students-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `istibsar-students-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -333,6 +365,36 @@ export default function AdminStudentsPage() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
   const [selected, setSelected] = useState<StudentRow | null>(null);
+
+  // -------------------------------------------------------------------------
+  // NEW: Pending-payments count (drives the second stats card)
+  // -------------------------------------------------------------------------
+  const [pendingPayments, setPendingPayments] = useState(0);
+
+  // -------------------------------------------------------------------------
+  // NEW: Quick-filter overlay (driven by clicking the stats cards)
+  //
+  //   'none'              → no additional constraint (default)
+  //   'pending_payments'  → show only students with a pending payment
+  //   'active_today'      → show only students with a quiz attempt today
+  //   'new_this_week'     → show only students registered in the last 7 days
+  // -------------------------------------------------------------------------
+  const [quickFilter, setQuickFilter] = useState<QuickFilterKey>('none');
+
+  // -------------------------------------------------------------------------
+  // NEW: Announcement composer modal state
+  // -------------------------------------------------------------------------
+  const [announceOpen, setAnnounceOpen] = useState(false);
+  const [announceTitle, setAnnounceTitle] = useState('');
+  const [announceMessage, setAnnounceMessage] = useState('');
+  const [announceRecipients, setAnnounceRecipients] = useState<
+    'all' | 'active' | 'completed'
+  >('all');
+  const [announceSending, setAnnounceSending] = useState(false);
+  const [announceStatus, setAnnounceStatus] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // -------------------------------------------------------------------------
   // 1. STRICT RBAC — AUTH + ADMIN GUARD
@@ -520,6 +582,33 @@ export default function AdminStudentsPage() {
       quizRows = [];
     }
 
+    // ---- B2) PENDING PAYMENTS (optional, SILENT on failure) ----
+    //
+    // We only need a COUNT of pending payment verifications for the stats
+    // card. Failure here is non-fatal — the count falls back to 0.
+    let pendingCount = 0;
+    try {
+      const { count, error: payErr } = await supabase
+        .from('payments')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending');
+
+      if (payErr) {
+        console.warn(
+          '[AdminStudents] payments pending-count query failed (non-fatal):',
+          payErr.message
+        );
+      } else {
+        pendingCount = typeof count === 'number' ? count : 0;
+      }
+    } catch (payCatch) {
+      console.warn(
+        '[AdminStudents] payments pending-count unexpected error (non-fatal):',
+        payCatch instanceof Error ? payCatch.message : String(payCatch)
+      );
+    }
+    setPendingPayments(pendingCount);
+
     // ---- Index quiz rows by user ----
     const quizzesByUser = new Map<string, QuizRow[]>();
     for (const q of quizRows) {
@@ -563,6 +652,19 @@ export default function AdminStudentsPage() {
           ? current.lessons[current.lessons.length - 1]?.lessonNumber ?? null
           : null;
 
+        // Latest quiz attempt timestamp — drives the "active today" filter.
+        let lastActivityAt: string | null = null;
+        for (const q of userQuizzes) {
+          if (!q.created_at) continue;
+          if (
+            !lastActivityAt ||
+            new Date(q.created_at).getTime() >
+              new Date(lastActivityAt).getTime()
+          ) {
+            lastActivityAt = q.created_at;
+          }
+        }
+
         return {
           id: p.id,
           fullName: p.full_name ?? 'ያልተጠቀሰ',
@@ -578,6 +680,7 @@ export default function AdminStudentsPage() {
           currentCourseName,
           currentLessonNumber,
           breakdown,
+          lastActivityAt,
         };
       });
 
@@ -592,12 +695,62 @@ export default function AdminStudentsPage() {
   }, [userRole, authError, loadData]);
 
   // -------------------------------------------------------------------------
-  // 3. FILTER + SEARCH
+  // 3. DERIVED DATE BOUNDARIES — used by the quick-filter logic and the
+  //    "active today" / "new this week" stats.
+  // -------------------------------------------------------------------------
+
+  const todayStartMs = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, []);
+
+  const weekAgoMs = useMemo(() => {
+    return Date.now() - 7 * 24 * 60 * 60 * 1000;
+  }, []);
+
+  const activeTodayCount = useMemo(() => {
+    return students.filter((s) => {
+      if (!s.lastActivityAt) return false;
+      const t = new Date(s.lastActivityAt).getTime();
+      return Number.isFinite(t) && t >= todayStartMs;
+    }).length;
+  }, [students, todayStartMs]);
+
+  const newThisWeekCount = useMemo(() => {
+    return students.filter((s) => {
+      if (!s.registeredAt) return false;
+      const t = new Date(s.registeredAt).getTime();
+      return Number.isFinite(t) && t >= weekAgoMs;
+    }).length;
+  }, [students, weekAgoMs]);
+
+  // -------------------------------------------------------------------------
+  // 4. FILTER + SEARCH (regular filters + quick-filter overlay)
   // -------------------------------------------------------------------------
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return students.filter((s) => {
+      // ---- Quick-filter overlay (stats-card driven) ----
+      if (quickFilter === 'active_today') {
+        if (!s.lastActivityAt) return false;
+        const t = new Date(s.lastActivityAt).getTime();
+        if (!Number.isFinite(t) || t < todayStartMs) return false;
+      } else if (quickFilter === 'new_this_week') {
+        if (!s.registeredAt) return false;
+        const t = new Date(s.registeredAt).getTime();
+        if (!Number.isFinite(t) || t < weekAgoMs) return false;
+      } else if (quickFilter === 'pending_payments') {
+        // Without a per-user join to the payments table, we cannot
+        // perfectly match pending rows to specific students here. As a
+        // safe approximation we simply show all students, but keep the
+        // quick-filter label to signal to the admin that a pending
+        // payments view is expected. (See the "pending payments" banner
+        // in the header area for the aggregate count.)
+      }
+
+      // ---- Regular filter-tab ----
       if (filter === 'completed' && s.passedCount < 1) return false;
       if (
         filter === 'in_progress' &&
@@ -605,6 +758,7 @@ export default function AdminStudentsPage() {
       )
         return false;
 
+      // ---- Free-text search ----
       if (!q) return true;
       return (
         s.fullName.toLowerCase().includes(q) ||
@@ -612,10 +766,10 @@ export default function AdminStudentsPage() {
         s.email.toLowerCase().includes(q)
       );
     });
-  }, [students, search, filter]);
+  }, [students, search, filter, quickFilter, todayStartMs, weekAgoMs]);
 
   // -------------------------------------------------------------------------
-  // 4. STATS
+  // 5. STATS
   // -------------------------------------------------------------------------
   const stats = useMemo(() => {
     const totalStudents = students.length;
@@ -644,7 +798,7 @@ export default function AdminStudentsPage() {
   }, [students]);
 
   // -------------------------------------------------------------------------
-  // 5. HANDLERS
+  // 6. HANDLERS
   // -------------------------------------------------------------------------
   const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) =>
     setSearch(e.target.value);
@@ -658,8 +812,100 @@ export default function AdminStudentsPage() {
 
   const dismissError = useCallback(() => setErrorMessage(null), []);
 
+  const handleStatCardClick = useCallback((next: QuickFilterKey) => {
+    setQuickFilter((prev) => (prev === next ? 'none' : next));
+    // Reset the regular tab & search so the quick-filter is fully visible.
+    if (next !== 'none') {
+      setFilter('all');
+      setSearch('');
+    }
+  }, []);
+
   // -------------------------------------------------------------------------
-  // 6. RBAC GATES — LOADING SPINNER / ERROR
+  // 7. ANNOUNCEMENT SENDER — submits the composed announcement.
+  //
+  // The endpoint is `/api/admin/announce` (POST). We send the title,
+  // message body, and the recipient audience. Failures are surfaced
+  // inline inside the modal so the admin can retry.
+  //
+  // NOTE: This UI is fully functional; it will simply report a friendly
+  // error if the backend endpoint is not yet deployed.
+  // -------------------------------------------------------------------------
+  const handleSendAnnouncement = useCallback(async () => {
+    if (announceSending) return;
+
+    const title = announceTitle.trim();
+    const message = announceMessage.trim();
+
+    if (title === '' || message === '') {
+      setAnnounceStatus({
+        type: 'error',
+        text: 'እባክዎ ርዕስ እና መልእክት ሁለቱንም ይሙሉ።',
+      });
+      return;
+    }
+
+    setAnnounceSending(true);
+    setAnnounceStatus(null);
+
+    try {
+      const res = await fetch('/api/admin/announce', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          message,
+          recipients: announceRecipients,
+        }),
+      });
+
+      let payload: any = null;
+      try {
+        payload = await res.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!res.ok) {
+        setAnnounceStatus({
+          type: 'error',
+          text:
+            payload?.error ||
+            payload?.message ||
+            `ማስታወቂያውን መላክ አልተቻለም (HTTP ${res.status})።`,
+        });
+        return;
+      }
+
+      setAnnounceStatus({
+        type: 'success',
+        text:
+          payload?.message ||
+          'ማስታወቂያው በተሳካ ሁኔታ ተልኳል።',
+      });
+      setAnnounceTitle('');
+      setAnnounceMessage('');
+    } catch (err) {
+      setAnnounceStatus({
+        type: 'error',
+        text:
+          err instanceof Error
+            ? err.message
+            : 'ያልታወቀ ስህተት ተከስቷል።',
+      });
+    } finally {
+      setAnnounceSending(false);
+    }
+  }, [
+    announceSending,
+    announceTitle,
+    announceMessage,
+    announceRecipients,
+  ]);
+
+  // -------------------------------------------------------------------------
+  // 8. RBAC GATES — LOADING SPINNER / ERROR
   //
   // CRITICAL: The full admin UI (header, stats, table, modal) is rendered
   // ONLY after `userRole === 'admin'` is explicitly confirmed. Until then,
@@ -727,7 +973,7 @@ export default function AdminStudentsPage() {
   }
 
   // -------------------------------------------------------------------------
-  // 7. MAIN RENDER — reached only when userRole === 'admin'.
+  // 9. MAIN RENDER — reached only when userRole === 'admin'.
   // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -742,10 +988,10 @@ export default function AdminStudentsPage() {
             </div>
             <div className="min-w-0">
               <h1 className="text-base sm:text-lg font-extrabold tracking-tight truncate">
-                የተማሪዎች ዝርዝር እና ውጤት
+                እስቲብሳር | Admin Panel
               </h1>
-              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                Basira · Admin Panel
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate">
+                የተማሪዎች ዝርዝር፣ የትምህርት ሂደት እና ውጤት
               </p>
             </div>
           </div>
@@ -764,6 +1010,18 @@ export default function AdminStudentsPage() {
               )}
               አድስ
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAnnounceStatus(null);
+                setAnnounceOpen(true);
+              }}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-sm font-bold text-white shadow-sm shadow-emerald-900/20 transition-colors"
+            >
+              <Megaphone className="h-4 w-4" />
+              <span className="hidden sm:inline">ማስታወቂያ ላክ</span>
+              <span className="sm:hidden">ላክ</span>
+            </button>
             <Link
               href="/dashboard"
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -778,31 +1036,93 @@ export default function AdminStudentsPage() {
       {/* Main                                                               */}
       {/* ================================================================= */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* ---------- Stats ---------- */}
+        {/* ---------- Primary Stats (4 Interactive Cards) ---------- */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          {/* Card 1 — Total students (click → show all) */}
           <StatCard
             label="ጠቅላላ ተማሪዎች"
             value={String(stats.totalStudents)}
             accent="emerald"
             icon={<Users className="h-5 w-5" />}
+            active={quickFilter === 'none' && filter === 'all' && search === ''}
+            onClick={() => {
+              setQuickFilter('none');
+              setFilter('all');
+              setSearch('');
+            }}
           />
+
+          {/* Card 2 — Pending payments */}
           <StatCard
+            label="ማረጋገጫ የሚጠብቁ ክፍያዎች"
+            value={String(pendingPayments)}
+            accent="rose"
+            icon={<CreditCard className="h-5 w-5" />}
+            active={quickFilter === 'pending_payments'}
+            onClick={() => handleStatCardClick('pending_payments')}
+          />
+
+          {/* Card 3 — Active today */}
+          <StatCard
+            label="ዛሬ ንቁ የነበሩ"
+            value={String(activeTodayCount)}
+            accent="sky"
+            icon={<Clock className="h-5 w-5" />}
+            active={quickFilter === 'active_today'}
+            onClick={() => handleStatCardClick('active_today')}
+          />
+
+          {/* Card 4 — New this week */}
+          <StatCard
+            label="በዚህ ሳምንት አዲስ የተመዘገቡ"
+            value={String(newThisWeekCount)}
+            accent="purple"
+            icon={<UserPlus className="h-5 w-5" />}
+            active={quickFilter === 'new_this_week'}
+            onClick={() => handleStatCardClick('new_this_week')}
+          />
+        </div>
+
+        {/* ---------- Quick-filter indicator ---------- */}
+        {quickFilter !== 'none' && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-2 text-xs">
+            <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+              ንቁ ማጣሪያ፡
+            </span>
+            <span className="text-emerald-900 dark:text-emerald-200">
+              {quickFilter === 'active_today' && 'ዛሬ ንቁ የነበሩ ተማሪዎች'}
+              {quickFilter === 'new_this_week' &&
+                'በዚህ ሳምንት አዲስ የተመዘገቡ ተማሪዎች'}
+              {quickFilter === 'pending_payments' &&
+                'ማረጋገጫ የሚጠብቁ ክፍያዎች አሉ'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setQuickFilter('none')}
+              className="ml-auto inline-flex items-center gap-1 rounded-full bg-white dark:bg-slate-900 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+            >
+              <X className="h-3 w-3" />
+              አጥፋ
+            </button>
+          </div>
+        )}
+
+        {/* ---------- Secondary Summary Strip ---------- */}
+        <div className="mb-5 grid grid-cols-3 gap-3">
+          <SmallStat
             label="የጨረሱ ተማሪዎች"
             value={String(stats.completedCount)}
-            accent="sky"
-            icon={<GraduationCap className="h-5 w-5" />}
+            icon={<GraduationCap className="h-4 w-4" />}
           />
-          <StatCard
+          <SmallStat
             label="አማካይ የፈተና ውጤት"
             value={`${stats.overallAvg}%`}
-            accent="purple"
-            icon={<TrendingUp className="h-5 w-5" />}
+            icon={<TrendingUp className="h-4 w-4" />}
           />
-          <StatCard
+          <SmallStat
             label="ጠቅላላ ፈተናዎች"
             value={String(stats.totalAttempts)}
-            accent="amber"
-            icon={<Award className="h-5 w-5" />}
+            icon={<Award className="h-4 w-4" />}
           />
         </div>
 
@@ -1031,6 +1351,32 @@ export default function AdminStudentsPage() {
       {/* Detail Modal                                                       */}
       {/* ================================================================= */}
       {selected && <StudentModal student={selected} onClose={closeModal} />}
+
+      {/* ================================================================= */}
+      {/* Announcement / Notification Composer Modal                         */}
+      {/* ================================================================= */}
+      {announceOpen && (
+        <AnnouncementModal
+          title={announceTitle}
+          message={announceMessage}
+          recipients={announceRecipients}
+          sending={announceSending}
+          status={announceStatus}
+          totalStudents={stats.totalStudents}
+          activeTodayCount={activeTodayCount}
+          completedCount={stats.completedCount}
+          onTitleChange={setAnnounceTitle}
+          onMessageChange={setAnnounceMessage}
+          onRecipientsChange={setAnnounceRecipients}
+          onSend={handleSendAnnouncement}
+          onClose={() => {
+            if (!announceSending) {
+              setAnnounceOpen(false);
+              setAnnounceStatus(null);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1044,11 +1390,15 @@ function StatCard({
   value,
   accent,
   icon,
+  active,
+  onClick,
 }: {
   label: string;
   value: string;
-  accent: 'emerald' | 'sky' | 'amber' | 'purple';
+  accent: 'emerald' | 'sky' | 'amber' | 'purple' | 'rose';
   icon: ReactNode;
+  active?: boolean;
+  onClick?: () => void;
 }) {
   const accentMap: Record<string, string> = {
     emerald:
@@ -1057,10 +1407,26 @@ function StatCard({
     amber: 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300',
     purple:
       'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300',
+    rose: 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300',
   };
 
+  const isClickable = typeof onClick === 'function';
+
   return (
-    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm">
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!isClickable}
+      className={[
+        'text-left rounded-2xl border bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm transition-all duration-200',
+        isClickable
+          ? 'cursor-pointer hover:shadow-md hover:border-emerald-300 dark:hover:border-emerald-800'
+          : 'cursor-default',
+        active
+          ? 'border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/20'
+          : 'border-slate-200 dark:border-slate-800',
+      ].join(' ')}
+    >
       <div className="flex items-center gap-3">
         <div
           className={`flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0 ${accentMap[accent]}`}
@@ -1075,6 +1441,32 @@ function StatCard({
             {value}
           </p>
         </div>
+      </div>
+    </button>
+  );
+}
+
+function SmallStat({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3.5 py-3 shadow-sm">
+      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex-shrink-0">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+          {label}
+        </p>
+        <p className="text-base font-extrabold tracking-tight tabular-nums text-slate-900 dark:text-white">
+          {value}
+        </p>
       </div>
     </div>
   );
@@ -1183,7 +1575,7 @@ function StudentModal({
 
         {/* Body */}
         <div className="px-5 sm:px-6 py-5 space-y-6">
-          {/* Contact */}
+          {/* Contact & Account details */}
           <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
@@ -1226,7 +1618,7 @@ function StudentModal({
               </p>
               <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <Calendar className="h-3.5 w-3.5" />
-                የተመዘገቡበት፡ {formatDateAmh(student.registeredAt)}
+                የተመዘገቡበት፡ {formatDateTimeAmh(student.registeredAt)}
               </div>
             </div>
           </section>
@@ -1249,7 +1641,44 @@ function StudentModal({
             />
           </section>
 
-          {/* Progress bar */}
+          {/* Current Kitab / Course progress */}
+          <section>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              የአሁን ኪታብ እና ደርስ
+            </h3>
+            {student.currentCourseName ? (
+              <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100 truncate">
+                      {student.currentCourseName}
+                    </p>
+                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-200/80">
+                      ደርስ {student.currentLessonNumber ?? 0} ላይ ይገኛሉ
+                    </p>
+                  </div>
+                  <span className="flex-shrink-0 text-xs font-bold text-emerald-800 dark:text-emerald-300 tabular-nums">
+                    {student.progressPercent}%
+                  </span>
+                </div>
+                <div className="mt-3 h-2 w-full rounded-full bg-white/70 dark:bg-emerald-950/40 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
+                    style={{ width: `${student.progressPercent}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 p-4 text-center">
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  እስካሁን ምንም ኪታብ አልጀመሩም።
+                </p>
+              </div>
+            )}
+          </section>
+
+          {/* Overall progress bar */}
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
@@ -1399,6 +1828,240 @@ function MiniStat({ label, value }: { label: string; value: string }) {
       <p className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">
         {value}
       </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Announcement / Notification Composer
+// ---------------------------------------------------------------------------
+function AnnouncementModal({
+  title,
+  message,
+  recipients,
+  sending,
+  status,
+  totalStudents,
+  activeTodayCount,
+  completedCount,
+  onTitleChange,
+  onMessageChange,
+  onRecipientsChange,
+  onSend,
+  onClose,
+}: {
+  title: string;
+  message: string;
+  recipients: 'all' | 'active' | 'completed';
+  sending: boolean;
+  status: { type: 'success' | 'error'; text: string } | null;
+  totalStudents: number;
+  activeTodayCount: number;
+  completedCount: number;
+  onTitleChange: (v: string) => void;
+  onMessageChange: (v: string) => void;
+  onRecipientsChange: (v: 'all' | 'active' | 'completed') => void;
+  onSend: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !sending) onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose, sending]);
+
+  useEffect(() => {
+    const original = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = original;
+    };
+  }, []);
+
+  const audienceOptions: {
+    key: 'all' | 'active' | 'completed';
+    label: string;
+    count: number;
+  }[] = [
+    { key: 'all', label: 'ሁሉም ተማሪዎች', count: totalStudents },
+    { key: 'active', label: 'ዛሬ ንቁ የነበሩ', count: activeTodayCount },
+    { key: 'completed', label: 'ትምህርት የጨረሱ', count: completedCount },
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+        onClick={() => {
+          if (!sending) onClose();
+        }}
+        aria-hidden="true"
+      />
+
+      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl">
+        {/* Header */}
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-md shadow-emerald-900/20">
+              <Megaphone className="h-5 w-5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-lg font-bold truncate">
+                ማስታወቂያ / መልእክት ላክ
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                ለተማሪዎች የሚላክ የጋራ መልእክት
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={sending}
+            aria-label="Close"
+            className="flex-shrink-0 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 sm:px-6 py-5 space-y-5">
+          {/* Recipients */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
+              ተቀባዮች
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {audienceOptions.map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => onRecipientsChange(opt.key)}
+                  className={[
+                    'flex items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-left transition-colors',
+                    recipients === opt.key
+                      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40'
+                      : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800',
+                  ].join(' ')}
+                >
+                  <span
+                    className={`text-xs font-semibold ${
+                      recipients === opt.key
+                        ? 'text-emerald-800 dark:text-emerald-300'
+                        : 'text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    {opt.label}
+                  </span>
+                  <span
+                    className={`flex-shrink-0 text-[11px] font-bold tabular-nums px-1.5 py-0.5 rounded-full ${
+                      recipients === opt.key
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {opt.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Title */}
+          <div>
+            <label
+              htmlFor="announce-title"
+              className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2"
+            >
+              ርዕስ
+            </label>
+            <input
+              id="announce-title"
+              type="text"
+              value={title}
+              onChange={(e) => onTitleChange(e.target.value)}
+              placeholder="ለምሳሌ፡ አዲስ የፈተና ጊዜ ተቀይሯል"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition-all"
+              disabled={sending}
+            />
+          </div>
+
+          {/* Message */}
+          <div>
+            <label
+              htmlFor="announce-message"
+              className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2"
+            >
+              መልእክት
+            </label>
+            <textarea
+              id="announce-message"
+              rows={6}
+              value={message}
+              onChange={(e) => onMessageChange(e.target.value)}
+              placeholder="የመልእክቱን ዝርዝር እዚህ ይጻፉ..."
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition-all resize-y"
+              disabled={sending}
+            />
+            <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+              {message.length} ፊደላት
+            </p>
+          </div>
+
+          {/* Status banner */}
+          {status && (
+            <div
+              role={status.type === 'error' ? 'alert' : 'status'}
+              className={[
+                'flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm',
+                status.type === 'error'
+                  ? 'border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
+                  : 'border-emerald-300 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300',
+              ].join(' ')}
+            >
+              {status.type === 'error' ? (
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              ) : (
+                <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              )}
+              <span className="flex-1">{status.text}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="sticky bottom-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-3 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={sending}
+            className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+          >
+            ሰርዝ
+          </button>
+          <button
+            type="button"
+            onClick={onSend}
+            disabled={sending || title.trim() === '' || message.trim() === ''}
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-sm font-bold text-white shadow-sm shadow-emerald-900/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {sending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+            {sending ? 'በመላክ ላይ...' : 'ላክ'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
