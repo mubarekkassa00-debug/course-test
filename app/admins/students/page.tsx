@@ -37,6 +37,12 @@ import {
   Clock,
   UserPlus,
   CreditCard,
+  Unlock,
+  Pencil,
+  Trash2,
+  Save,
+  RotateCcw,
+  Info,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +68,9 @@ const COURSE_NAME_BY_SLUG = new Map(
 );
 
 const PASS_THRESHOLD_PERCENT = 50;
+
+/** Default total-questions value used when an admin unlocks a lesson. */
+const DEFAULT_UNLOCK_TOTAL_QUESTIONS = 5;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +125,8 @@ interface StudentRow {
   attemptsCount: number;
   currentCourseName: string | null;
   currentLessonNumber: number | null;
+  /** Slug of the student's current kitab — used by the override tools. */
+  currentCourseId: string | null;
   breakdown: CourseBreakdown[];
   /** Latest quiz attempt timestamp — used to compute "active today". */
   lastActivityAt: string | null;
@@ -371,12 +382,6 @@ export default function AdminStudentsPage() {
 
   // -------------------------------------------------------------------------
   // RBAC state
-  //
-  //   authLoading  → true while we're still verifying auth + role.
-  //   userRole     → set to the confirmed profile role (or null).
-  //   authError    → set when the profile lookup itself fails (rare).
-  //
-  // The main content is rendered ONLY when `userRole === 'admin'`.
   // -------------------------------------------------------------------------
   const [authLoading, setAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -392,15 +397,11 @@ export default function AdminStudentsPage() {
 
   // -------------------------------------------------------------------------
   // Active view — only ONE of the two tables renders at a time.
-  //
-  //   'list'    → ጠቅላላ ተማሪዎች (contact & registration overview)
-  //   'monitor' → የተማሪዎች መቆጣጠሪያ (progress & score monitor)
   // -------------------------------------------------------------------------
   const [activeView, setActiveView] = useState<ActiveView>('list');
 
   // -------------------------------------------------------------------------
   // Pending-payments count + the set of user_ids with pending payments.
-  // The count drives the stats card; the set drives the quick-filter.
   // -------------------------------------------------------------------------
   const [pendingPayments, setPendingPayments] = useState(0);
   const [pendingPaymentUserIds, setPendingPaymentUserIds] = useState<
@@ -408,12 +409,7 @@ export default function AdminStudentsPage() {
   >(new Set());
 
   // -------------------------------------------------------------------------
-  // Quick-filter overlay (driven by clicking the stats cards)
-  //
-  //   'none'              → no additional constraint (default)
-  //   'pending_payments'  → show only students with a pending payment
-  //   'active_today'      → show only students with a quiz attempt today
-  //   'new_this_week'     → show only students registered in the last 7 days
+  // Quick-filter overlay
   // -------------------------------------------------------------------------
   const [quickFilter, setQuickFilter] = useState<QuickFilterKey>('none');
 
@@ -601,7 +597,6 @@ export default function AdminStudentsPage() {
     let pendingCount = 0;
     let pendingIds = new Set<string>();
     try {
-      // Count query (unchanged behaviour)
       const { count, error: payErr } = await supabase
         .from('payments')
         .select('id', { count: 'exact', head: true })
@@ -616,9 +611,6 @@ export default function AdminStudentsPage() {
         pendingCount = typeof count === 'number' ? count : 0;
       }
 
-      // Additional query — fetch the actual pending user_ids so the
-      // quick-filter card can narrow the tables to those students.
-      // This does NOT modify any existing query.
       const { data: pendingRows, error: pendingRowsErr } = await supabase
         .from('payments')
         .select('user_id')
@@ -683,6 +675,7 @@ export default function AdminStudentsPage() {
 
         const current = breakdown[0] ?? null;
         const currentCourseName = current?.courseName ?? null;
+        const currentCourseId = current?.courseId ?? null;
         const currentLessonNumber = current
           ? current.lessons[current.lessons.length - 1]?.lessonNumber ?? null
           : null;
@@ -715,6 +708,7 @@ export default function AdminStudentsPage() {
           averageScore,
           attemptsCount: userQuizzes.length,
           currentCourseName,
+          currentCourseId,
           currentLessonNumber,
           breakdown,
           lastActivityAt,
@@ -733,8 +727,7 @@ export default function AdminStudentsPage() {
   }, [userRole, authError, loadData]);
 
   // -------------------------------------------------------------------------
-  // 3. DERIVED DATE BOUNDARIES — used by the quick-filter logic and the
-  //    "active today" / "new this week" stats.
+  // 3. DERIVED DATE BOUNDARIES
   // -------------------------------------------------------------------------
   const todayStartMs = useMemo(() => {
     const d = new Date();
@@ -763,13 +756,12 @@ export default function AdminStudentsPage() {
   }, [students, weekAgoMs]);
 
   // -------------------------------------------------------------------------
-  // 4. FILTER + SEARCH (regular filters + quick-filter overlay)
+  // 4. FILTER + SEARCH
   // -------------------------------------------------------------------------
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
     return students.filter((s) => {
-      // ---- Quick-filter overlay (stats-card driven) ----
       if (quickFilter === 'active_today') {
         if (!s.lastActivityAt) return false;
         const t = new Date(s.lastActivityAt).getTime();
@@ -782,7 +774,6 @@ export default function AdminStudentsPage() {
         if (!pendingPaymentUserIds.has(s.id)) return false;
       }
 
-      // ---- Regular filter-tab ----
       if (filter === 'completed' && s.passedCount < 1) return false;
       if (
         filter === 'in_progress' &&
@@ -790,7 +781,6 @@ export default function AdminStudentsPage() {
       )
         return false;
 
-      // ---- Free-text search ----
       if (!q) return true;
       return (
         s.fullName.toLowerCase().includes(q) ||
@@ -852,24 +842,15 @@ export default function AdminStudentsPage() {
 
   const dismissError = useCallback(() => setErrorMessage(null), []);
 
-  /**
-   * Applies (or toggles off) a quick-filter overlay driven by the top
-   * stats cards, AND forces the active view to the contact-list table so
-   * the user always sees the narrowed result in the expected table.
-   */
   const handleStatCardClick = useCallback((next: QuickFilterKey) => {
     setActiveView('list');
     setQuickFilter((prev) => (prev === next ? 'none' : next));
-    // Reset the regular tab & search so the quick-filter is fully visible.
     if (next !== 'none') {
       setFilter('all');
       setSearch('');
     }
   }, []);
 
-  /**
-   * Resets every filter and switches to the ጠቅላላ ተማሪዎች contact list.
-   */
   const handleShowAllStudents = useCallback(() => {
     setActiveView('list');
     setQuickFilter('none');
@@ -877,11 +858,6 @@ export default function AdminStudentsPage() {
     setSearch('');
   }, []);
 
-  /**
-   * Switches to the የተማሪዎች መቆጣጠሪያ (Student Progress Monitor) table.
-   * Quick-filter overlays are intentionally cleared so the monitor always
-   * renders the full student body for progress review.
-   */
   const handleShowMonitor = useCallback(() => {
     setActiveView('monitor');
     setQuickFilter('none');
@@ -890,7 +866,7 @@ export default function AdminStudentsPage() {
   }, []);
 
   // -------------------------------------------------------------------------
-  // 7. ANNOUNCEMENT SENDER — submits the composed announcement.
+  // 7. ANNOUNCEMENT SENDER
   // -------------------------------------------------------------------------
   const handleSendAnnouncement = useCallback(async () => {
     if (announceSending) return;
@@ -1085,36 +1061,94 @@ export default function AdminStudentsPage() {
       {/* Main                                                               */}
       {/* ================================================================= */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* ---------- Primary Stats (4 Interactive Cards) ---------- */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
-          {/* Card 1 — Total students (click → show all in the contact list) */}
-          <StatCard
-            label="ጠቅላላ ተማሪዎች"
-            value={String(stats.totalStudents)}
-            accent="emerald"
-            icon={<Users className="h-5 w-5" />}
-            active={
-              activeView === 'list' &&
-              quickFilter === 'none' &&
-              filter === 'all' &&
-              search === ''
-            }
+        {/* ============================================================ */}
+        {/* SECTION-SELECTOR CARDS — top summary cards                    */}
+        {/*                                                              */}
+        {/* Two prominent clickable cards that swap between the two       */}
+        {/* mutually-exclusive tables. Each card shows the student count  */}
+        {/* for its view and is highlighted when active.                  */}
+        {/* ============================================================ */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
+          {/* Card — ጠቅላላ ተማሪዎች (contact list view) */}
+          <button
+            type="button"
             onClick={handleShowAllStudents}
-          />
+            className={[
+              'text-left rounded-2xl border bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm transition-all duration-200',
+              'cursor-pointer hover:shadow-md hover:border-emerald-300 dark:hover:border-emerald-800',
+              activeView === 'list'
+                ? 'border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/20'
+                : 'border-slate-200 dark:border-slate-800',
+            ].join(' ')}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl flex-shrink-0 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                <Users className="h-5 w-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  ጠቅላላ ተማሪዎች
+                </p>
+                <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums text-slate-900 dark:text-white">
+                  {stats.totalStudents}
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  ስም · የተመዘገቡበት ቀን · ስልክ · ኢሜይል
+                </p>
+              </div>
+              {activeView === 'list' && (
+                <CheckCircle className="h-5 w-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
+              )}
+            </div>
+          </button>
 
-          {/* Card 2 — Pending payments (click → filter contact list) */}
+          {/* Card — የተማሪዎች መቆጣጠሪያ (progress & score view) */}
+          <button
+            type="button"
+            onClick={handleShowMonitor}
+            className={[
+              'text-left rounded-2xl border bg-white dark:bg-slate-900 p-4 sm:p-5 shadow-sm transition-all duration-200',
+              'cursor-pointer hover:shadow-md hover:border-sky-300 dark:hover:border-sky-800',
+              activeView === 'monitor'
+                ? 'border-sky-400 dark:border-sky-700 ring-2 ring-sky-500/20'
+                : 'border-slate-200 dark:border-slate-800',
+            ].join(' ')}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl flex-shrink-0 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300">
+                <GraduationCap className="h-5 w-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  የተማሪዎች መቆጣጠሪያ
+                </p>
+                <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums text-slate-900 dark:text-white">
+                  {stats.totalStudents}
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  ኪታብ · ደርስ · የፈተና ውጤቶች · ማስተካከያ
+                </p>
+              </div>
+              {activeView === 'monitor' && (
+                <CheckCircle className="h-5 w-5 flex-shrink-0 text-sky-600 dark:text-sky-400" />
+              )}
+            </div>
+          </button>
+        </div>
+
+        {/* ---------- Primary Filter Stats (4 Interactive Cards) ---------- */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
+          {/* Card — Pending payments */}
           <StatCard
             label="ማረጋገጫ የሚጠብቁ ክፍያዎች"
             value={String(pendingPayments)}
             accent="rose"
             icon={<CreditCard className="h-5 w-5" />}
-            active={
-              activeView === 'list' && quickFilter === 'pending_payments'
-            }
+            active={activeView === 'list' && quickFilter === 'pending_payments'}
             onClick={() => handleStatCardClick('pending_payments')}
           />
 
-          {/* Card 3 — Active today (click → filter contact list) */}
+          {/* Card — Active today */}
           <StatCard
             label="ዛሬ ንቁ የነበሩ"
             value={String(activeTodayCount)}
@@ -1124,81 +1158,49 @@ export default function AdminStudentsPage() {
             onClick={() => handleStatCardClick('active_today')}
           />
 
-          {/* Card 4 — New this week (click → filter contact list) */}
+          {/* Card — New this week */}
           <StatCard
             label="በዚህ ሳምንት አዲስ የተመዘገቡ"
             value={String(newThisWeekCount)}
             accent="purple"
             icon={<UserPlus className="h-5 w-5" />}
-            active={
-              activeView === 'list' && quickFilter === 'new_this_week'
-            }
+            active={activeView === 'list' && quickFilter === 'new_this_week'}
             onClick={() => handleStatCardClick('new_this_week')}
+          />
+
+          {/* Card — Completed students (informational only) */}
+          <StatCard
+            label="የጨረሱ ተማሪዎች"
+            value={String(stats.completedCount)}
+            accent="emerald"
+            icon={<GraduationCap className="h-5 w-5" />}
+            active={false}
           />
         </div>
 
-        {/* ---------- View Switcher Tabs ---------- */}
-        {/*
-          Two mutually-exclusive views. Only ONE table renders below based
-          on which tab is active. The dedicated "የተማሪዎች መቆጣጠሪያ" tab sits
-          alongside the summary cards so it is always discoverable.
-        */}
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1 shadow-sm">
+        {/* ---------- Quick-filter indicator ---------- */}
+        {activeView === 'list' && quickFilter !== 'none' && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-2 text-xs">
+            <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+              ንቁ ማጣሪያ፡
+            </span>
+            <span className="text-emerald-900 dark:text-emerald-200">
+              {quickFilter === 'active_today' && 'ዛሬ ንቁ የነበሩ ተማሪዎች'}
+              {quickFilter === 'new_this_week' &&
+                'በዚህ ሳምንት አዲስ የተመዘገቡ ተማሪዎች'}
+              {quickFilter === 'pending_payments' &&
+                'ማረጋገጫ የሚጠብቁ ክፍያዎች ያላቸው ተማሪዎች'}
+            </span>
             <button
               type="button"
-              onClick={handleShowAllStudents}
-              className={[
-                'inline-flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold transition-colors',
-                activeView === 'list'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
-              ].join(' ')}
+              onClick={() => setQuickFilter('none')}
+              className="ml-auto inline-flex items-center gap-1 rounded-full bg-white dark:bg-slate-900 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
             >
-              <Users className="h-4 w-4" />
-              ጠቅላላ ተማሪዎች
-            </button>
-
-            <button
-              type="button"
-              onClick={handleShowMonitor}
-              className={[
-                'inline-flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold transition-colors',
-                activeView === 'monitor'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
-              ].join(' ')}
-            >
-              <GraduationCap className="h-4 w-4" />
-              የተማሪዎች መቆጣጠሪያ
+              <X className="h-3 w-3" />
+              አጥፋ
             </button>
           </div>
-
-          {/* Quick-filter indicator — only meaningful in the list view */}
-          {activeView === 'list' && quickFilter !== 'none' && (
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-2 text-xs">
-              <span className="font-semibold text-emerald-800 dark:text-emerald-300">
-                ንቁ ማጣሪያ፡
-              </span>
-              <span className="text-emerald-900 dark:text-emerald-200">
-                {quickFilter === 'active_today' &&
-                  'ዛሬ ንቁ የነበሩ ተማሪዎች'}
-                {quickFilter === 'new_this_week' &&
-                  'በዚህ ሳምንት አዲስ የተመዘገቡ ተማሪዎች'}
-                {quickFilter === 'pending_payments' &&
-                  'ማረጋገጫ የሚጠብቁ ክፍያዎች ያላቸው ተማሪዎች'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setQuickFilter('none')}
-                className="inline-flex items-center gap-1 rounded-full bg-white dark:bg-slate-900 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
-              >
-                <X className="h-3 w-3" />
-                አጥፋ
-              </button>
-            </div>
-          )}
-        </div>
+        )}
 
         {/* ---------- Secondary Summary Strip ---------- */}
         <div className="mb-5 grid grid-cols-3 gap-3">
@@ -1219,7 +1221,7 @@ export default function AdminStudentsPage() {
           />
         </div>
 
-        {/* ---------- Toolbar (shared by both views) ---------- */}
+        {/* ---------- Toolbar ---------- */}
         <div className="mb-5 flex flex-col lg:flex-row lg:items-center gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -1292,9 +1294,6 @@ export default function AdminStudentsPage() {
 
         {/* ================================================================ */}
         {/* ACTIVE VIEW — only ONE table is rendered at a time.              */}
-        {/*                                                                  */}
-        {/*   activeView === 'list'    → ጠቅላላ ተማሪዎች contact list            */}
-        {/*   activeView === 'monitor' → የተማሪዎች መቆጣጠሪያ progress monitor     */}
         {/* ================================================================ */}
         {activeView === 'list' ? (
           <section>
@@ -1432,10 +1431,12 @@ export default function AdminStudentsPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1020px]">
+                  <table className="w-full min-w-[1080px]">
                     <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
                       <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                        <th className="px-5 py-3 font-semibold">ተማሪ</th>
+                        <th className="px-5 py-3 font-semibold">
+                          የተማሪው ስም
+                        </th>
                         <th className="px-5 py-3 font-semibold">
                           አሁን ያሉበት ኪታብ እና ደርስ
                         </th>
@@ -1456,7 +1457,7 @@ export default function AdminStudentsPage() {
                           key={`monitor-${s.id}`}
                           className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
                         >
-                          {/* Student */}
+                          {/* Student name */}
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
                               <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
@@ -1554,9 +1555,9 @@ export default function AdminStudentsPage() {
                             <button
                               type="button"
                               onClick={() => setSelected(s)}
-                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 dark:border-emerald-500 bg-transparent px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 dark:border-emerald-500 bg-transparent px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors whitespace-nowrap"
                             >
-                              ዝርዝር እይ
+                              ዝርዝር እና ማስተካከያ
                               <ChevronRight className="h-3.5 w-3.5" />
                             </button>
                           </td>
@@ -1576,9 +1577,15 @@ export default function AdminStudentsPage() {
       </main>
 
       {/* ================================================================= */}
-      {/* Detail Modal                                                       */}
+      {/* Detail + Override Modal                                            */}
       {/* ================================================================= */}
-      {selected && <StudentModal student={selected} onClose={closeModal} />}
+      {selected && (
+        <StudentModal
+          student={selected}
+          onClose={closeModal}
+          onRefresh={loadData}
+        />
+      )}
 
       {/* ================================================================= */}
       {/* Announcement / Notification Composer Modal                         */}
@@ -1729,13 +1736,38 @@ function ContactTableSkeleton() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// StudentModal — detail view + ADMIN OVERRIDE CONTROLS
+// ---------------------------------------------------------------------------
 function StudentModal({
   student,
   onClose,
+  onRefresh,
 }: {
   student: StudentRow;
   onClose: () => void;
+  onRefresh: () => void | Promise<void>;
 }) {
+  // -------------------------------------------------------------------------
+  // Local override state
+  //
+  //   editingKey    → identifies the lesson row currently in edit mode
+  //                   (format: `<courseId>::<date>`)
+  //   editScore     → the new score the admin typed
+  //   busyKey       → identifies the row with an in-flight operation
+  //   feedback      → inline success/error message shown in the modal
+  // -------------------------------------------------------------------------
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editScore, setEditScore] = useState('');
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [unlockingCourseId, setUnlockingCourseId] = useState<string | null>(
+    null
+  );
+  const [feedback, setFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -1753,6 +1785,221 @@ function StudentModal({
   }, []);
 
   const cleanPhone = student.phone.replace(/\s+/g, '');
+
+  const lessonKey = (courseId: string, date: string | null) =>
+    `${courseId}::${date ?? ''}`;
+
+  // -------------------------------------------------------------------------
+  // ADMIN OVERRIDE — Save new score
+  //
+  // Directly updates the matching `quiz_results` row identified by
+  // user_id + course_id + created_at. This preserves the existing schema
+  // (no column changes) and immediately refreshes the parent data.
+  // -------------------------------------------------------------------------
+  const handleSaveScore = useCallback(
+    async (courseId: string, lessonDate: string | null) => {
+      if (!lessonDate) {
+        setFeedback({
+          type: 'error',
+          text: 'የዚህ ሙከራ ቀን አልተገኘም። ማስተካከል አልተቻለም።',
+        });
+        return;
+      }
+
+      const trimmed = editScore.trim();
+      if (trimmed === '') {
+        setFeedback({
+          type: 'error',
+          text: 'እባክዎ አዲሱን ነጥብ ያስገቡ።',
+        });
+        return;
+      }
+
+      // Accept "3" or "3/5". Parse the numerator (or full number).
+      let newScore = 0;
+      if (trimmed.includes('/')) {
+        const [num] = trimmed.split('/');
+        newScore = Number(num);
+      } else {
+        newScore = Number(trimmed);
+      }
+
+      if (!Number.isFinite(newScore) || newScore < 0) {
+        setFeedback({
+          type: 'error',
+          text: 'የተሰጠው ነጥብ ትክክል አይደለም።',
+        });
+        return;
+      }
+
+      setBusyKey(lessonKey(courseId, lessonDate));
+      setFeedback(null);
+
+      try {
+        const { error } = await supabase
+          .from('quiz_results')
+          .update({ score: newScore })
+          .eq('user_id', student.id)
+          .eq('course_id', courseId)
+          .eq('created_at', lessonDate);
+
+        if (error) {
+          setFeedback({
+            type: 'error',
+            text: `ማስተካከል አልተቻለም፡ ${error.message}`,
+          });
+          return;
+        }
+
+        setFeedback({
+          type: 'success',
+          text: 'የፈተናው ነጥብ በተሳካ ሁኔታ ተስተካክሏል።',
+        });
+        setEditingKey(null);
+        setEditScore('');
+        await onRefresh();
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
+        });
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [editScore, student.id, onRefresh]
+  );
+
+  // -------------------------------------------------------------------------
+  // ADMIN OVERRIDE — Delete quiz attempt (allow retake)
+  //
+  // Removes the specific `quiz_results` row so the student can retake the
+  // lesson from scratch. The parent is refreshed immediately afterwards.
+  // -------------------------------------------------------------------------
+  const handleDeleteAttempt = useCallback(
+    async (courseId: string, lessonDate: string | null) => {
+      if (!lessonDate) {
+        setFeedback({
+          type: 'error',
+          text: 'የዚህ ሙከራ ቀን አልተገኘም። ማጥፋት አልተቻለም።',
+        });
+        return;
+      }
+
+      const confirmed = window.confirm(
+        'ይህን የፈተና ሙከራ ማጥፋት ይፈልጋሉ? ተማሪው እንደገና መፈተን ይችላል።'
+      );
+      if (!confirmed) return;
+
+      setBusyKey(lessonKey(courseId, lessonDate));
+      setFeedback(null);
+
+      try {
+        const { error } = await supabase
+          .from('quiz_results')
+          .delete()
+          .eq('user_id', student.id)
+          .eq('course_id', courseId)
+          .eq('created_at', lessonDate);
+
+        if (error) {
+          setFeedback({
+            type: 'error',
+            text: `ማጥፋት አልተቻለም፡ ${error.message}`,
+          });
+          return;
+        }
+
+        setFeedback({
+          type: 'success',
+          text: 'የፈተናው ሙከራ ተሰርዟል። ተማሪው እንደገና መፈተን ይችላል።',
+        });
+        await onRefresh();
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
+        });
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [student.id, onRefresh]
+  );
+
+  // -------------------------------------------------------------------------
+  // ADMIN OVERRIDE — Unlock the next lesson
+  //
+  // Inserts a passing `quiz_results` row for the target course. This is a
+  // safe, additive operation that never deletes or modifies existing rows;
+  // it simply credits the student with a passed lesson so the next lesson
+  // in the curriculum becomes accessible.
+  //
+  // The denominator defaults to `DEFAULT_UNLOCK_TOTAL_QUESTIONS`, and the
+  // score is set to the minimum passing threshold so the row is marked as
+  // "passed" by the aggregation logic downstream.
+  // -------------------------------------------------------------------------
+  const handleUnlockNextLesson = useCallback(
+    async (courseId: string) => {
+      setUnlockingCourseId(courseId);
+      setFeedback(null);
+
+      try {
+        const total = DEFAULT_UNLOCK_TOTAL_QUESTIONS;
+        const passingScore = Math.ceil(
+          (total * PASS_THRESHOLD_PERCENT) / 100
+        );
+
+        const { error } = await supabase
+          .from('quiz_results')
+          .insert({
+            user_id: student.id,
+            course_id: courseId,
+            score: passingScore,
+            total_questions: total,
+            created_at: new Date().toISOString(),
+          });
+
+        if (error) {
+          setFeedback({
+            type: 'error',
+            text: `ቀጣዩን ደርስ መክፈት አልተቻለም፡ ${error.message}`,
+          });
+          return;
+        }
+
+        setFeedback({
+          type: 'success',
+          text: 'ቀጣዩ ደርስ በተሳካ ሁኔታ ተከፍቷል።',
+        });
+        await onRefresh();
+      } catch (err) {
+        setFeedback({
+          type: 'error',
+          text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
+        });
+      } finally {
+        setUnlockingCourseId(null);
+      }
+    },
+    [student.id, onRefresh]
+  );
+
+  const startEditing = (
+    courseId: string,
+    lessonDate: string | null,
+    currentScore: number
+  ) => {
+    setEditingKey(lessonKey(courseId, lessonDate));
+    setEditScore(String(currentScore));
+    setFeedback(null);
+  };
+
+  const cancelEditing = () => {
+    setEditingKey(null);
+    setEditScore('');
+    setFeedback(null);
+  };
 
   return (
     <div
@@ -1778,7 +2025,7 @@ function StudentModal({
                 {student.fullName}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                ዝርዝር የፈተና ውጤት
+                ዝርዝር ውጤት እና የአስተዳዳሪ ማስተካከያ
               </p>
             </div>
           </div>
@@ -1795,6 +2042,34 @@ function StudentModal({
 
         {/* Body */}
         <div className="px-5 sm:px-6 py-5 space-y-6">
+          {/* Inline feedback banner */}
+          {feedback && (
+            <div
+              role={feedback.type === 'error' ? 'alert' : 'status'}
+              className={[
+                'flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm',
+                feedback.type === 'error'
+                  ? 'border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300'
+                  : 'border-emerald-300 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300',
+              ].join(' ')}
+            >
+              {feedback.type === 'error' ? (
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              ) : (
+                <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              )}
+              <span className="flex-1">{feedback.text}</span>
+              <button
+                type="button"
+                onClick={() => setFeedback(null)}
+                aria-label="Dismiss"
+                className="flex-shrink-0 rounded p-0.5 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Contact & Account details */}
           <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-4">
@@ -1888,6 +2163,30 @@ function StudentModal({
                     style={{ width: `${student.progressPercent}%` }}
                   />
                 </div>
+
+                {/* Unlock next lesson — inline action */}
+                {student.currentCourseId && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleUnlockNextLesson(student.currentCourseId!)
+                      }
+                      disabled={unlockingCourseId === student.currentCourseId}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors disabled:opacity-60"
+                    >
+                      {unlockingCourseId === student.currentCourseId ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Unlock className="h-3.5 w-3.5" />
+                      )}
+                      ቀጣዩን ደርስ ክፈት
+                    </button>
+                    <span className="text-[11px] text-emerald-800/80 dark:text-emerald-200/80">
+                      ተማሪው በቴክኒክ ችግር ምክንያት ሲዘገይ ብቻ ይጠቀሙበት።
+                    </span>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 p-4 text-center">
@@ -1916,7 +2215,16 @@ function StudentModal({
             </div>
           </section>
 
-          {/* Lesson breakdown */}
+          {/* Admin Override info line */}
+          <section className="flex items-start gap-2.5 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/70 dark:bg-indigo-950/30 px-3.5 py-2.5 text-xs text-indigo-800 dark:text-indigo-300">
+            <Info className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>
+              የአስተዳዳሪ ማስተካከያ መሳሪያዎች፡ የተማሪውን የፈተና ነጥብ ማስተካከል፣ የተሳሳተ
+              ሙከራ ማጥፋት እና ቀጣይ ደርስ መክፈት ይችላሉ።
+            </span>
+          </section>
+
+          {/* Lesson breakdown with override controls */}
           <section>
             <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
               <BookOpen className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
@@ -1962,60 +2270,163 @@ function StudentModal({
                           </p>
                         </div>
                       </div>
-                      <span
-                        className={`flex-shrink-0 text-xs font-bold tabular-nums ${
-                          course.passed
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : 'text-amber-700 dark:text-amber-400'
-                        }`}
-                      >
-                        {course.bestPercent}%
-                      </span>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span
+                          className={`text-xs font-bold tabular-nums ${
+                            course.passed
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : 'text-amber-700 dark:text-amber-400'
+                          }`}
+                        >
+                          {course.bestPercent}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUnlockNextLesson(course.courseId)
+                          }
+                          disabled={unlockingCourseId === course.courseId}
+                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-300 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/40 px-2.5 py-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/60 transition-colors disabled:opacity-60"
+                          title="ቀጣዩን ደርስ ክፈት"
+                        >
+                          {unlockingCourseId === course.courseId ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Unlock className="h-3 w-3" />
+                          )}
+                          ክፈት
+                        </button>
+                      </div>
                     </div>
 
                     <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {course.lessons.map((lesson) => (
-                        <div
-                          key={lesson.lessonNumber}
-                          className="flex items-center justify-between gap-3 px-4 py-3"
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div
-                              className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-                                lesson.passed
-                                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
-                                  : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400'
-                              }`}
-                            >
-                              {lesson.lessonNumber}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                                ደርስ {lesson.lessonNumber}፡ {lesson.score}/
-                                {lesson.total} መለሱ
-                              </p>
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                                {formatDateAmh(lesson.date)}
-                              </p>
-                            </div>
-                          </div>
+                      {course.lessons.map((lesson) => {
+                        const key = lessonKey(
+                          course.courseId,
+                          lesson.date
+                        );
+                        const isEditing = editingKey === key;
+                        const isBusy = busyKey === key;
 
-                          <div className="text-right flex-shrink-0">
-                            <p
-                              className={`text-sm font-bold tabular-nums ${
-                                lesson.passed
-                                  ? 'text-emerald-700 dark:text-emerald-400'
-                                  : 'text-red-700 dark:text-red-400'
-                              }`}
-                            >
-                              {lesson.percent}%
-                            </p>
-                            <p className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
-                              {lesson.passed ? 'ተሳክቷል' : 'አልተሳካም'}
-                            </p>
+                        return (
+                          <div
+                            key={`${course.courseId}-${lesson.lessonNumber}`}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3"
+                          >
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div
+                                className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                                  lesson.passed
+                                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                                    : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400'
+                                }`}
+                              >
+                                {lesson.lessonNumber}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                                  ደርስ {lesson.lessonNumber}፡ {lesson.score}/
+                                  {lesson.total} መለሱ
+                                </p>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {formatDateTimeAmh(lesson.date)}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Override controls */}
+                            <div className="flex items-center gap-2 flex-shrink-0 self-end sm:self-auto">
+                              {isEditing ? (
+                                <>
+                                  <input
+                                    type="text"
+                                    value={editScore}
+                                    onChange={(e) =>
+                                      setEditScore(e.target.value)
+                                    }
+                                    placeholder={`${lesson.score}`}
+                                    className="w-20 px-2.5 py-1.5 rounded-lg border border-emerald-400 dark:border-emerald-700 bg-white dark:bg-slate-900 text-sm font-mono text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                                    disabled={isBusy}
+                                    autoFocus
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSaveScore(
+                                        course.courseId,
+                                        lesson.date
+                                      )
+                                    }
+                                    disabled={isBusy}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1.5 text-[11px] font-bold text-white transition-colors disabled:opacity-60"
+                                  >
+                                    {isBusy ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Save className="h-3 w-3" />
+                                    )}
+                                    አስቀምጥ
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={cancelEditing}
+                                    disabled={isBusy}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-60"
+                                  >
+                                    ሰርዝ
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span
+                                    className={`text-sm font-bold tabular-nums ${
+                                      lesson.passed
+                                        ? 'text-emerald-700 dark:text-emerald-400'
+                                        : 'text-red-700 dark:text-red-400'
+                                    }`}
+                                  >
+                                    {lesson.percent}%
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      startEditing(
+                                        course.courseId,
+                                        lesson.date,
+                                        lesson.score
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="ነጥብ አስተካክል"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                    አስተካክል
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleDeleteAttempt(
+                                        course.courseId,
+                                        lesson.date
+                                      )
+                                    }
+                                    disabled={isBusy}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-amber-300 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-950/60 transition-colors disabled:opacity-60"
+                                    title="ሙከራውን አጥፋ (እንደገና እንዲፈተን)"
+                                  >
+                                    {isBusy ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="h-3 w-3" />
+                                    )}
+                                    እንደገና
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
