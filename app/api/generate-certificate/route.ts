@@ -265,7 +265,7 @@ function buildCertificateFilename(studentName: string): string {
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^A-Za-z0-9_-]/g, '');
-  return `Basira_Certificate_${safe || 'Certificate'}.pdf`;
+  return `Istibsar_Certificate_${safe || 'Certificate'}.pdf`;
 }
 
 function pdfDownloadResponse(
@@ -834,7 +834,7 @@ function generateCertificatePdf(opts: {
         margins: { top: 0, bottom: 0, left: 0, right: 0 },
         info: {
           Title: 'Certificate of Completion',
-          Author: 'BASIRA Islamic Studies Program',
+          Author: 'ISTIBSAR Islamic Studies Program',
         },
       });
 
@@ -886,7 +886,7 @@ function generateCertificatePdf(opts: {
       //
       // If the file is missing or unreadable, `loadPublicImage` returns
       // `null` and we fall back to drawing the original decorative badge
-      // (concentric circles + corner diamonds + "BASIRA" text) so the
+      // (concentric circles + corner diamonds + "ISTIBSAR" text) so the
       // certificate always renders correctly.
       // ---------------------------------------------------------------------
       const logoBuffer = loadPublicImage('logo-transparent.png');
@@ -927,7 +927,7 @@ function generateCertificatePdf(opts: {
         drawDiamond(cx - sealR, sealCY, 3.5);
 
         doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(14)
-          .text('BASIRA', cx - 45, sealCY - 10, { width: 90, align: 'center' });
+          .text('ISTIBSAR', cx - 45, sealCY - 10, { width: 90, align: 'center' });
       }
 
       doc.fillColor(DARK_GREEN).font('Helvetica-Bold').fontSize(32)
@@ -962,7 +962,7 @@ function generateCertificatePdf(opts: {
 
       doc.fillColor(SLATE).font('Helvetica').fontSize(11)
         .text(
-          'has successfully completed all four required books of the BASIRA Islamic Studies Program:',
+          'has successfully completed all four required books of the ISTIBSAR Islamic Studies Program:',
           0, 322, { align: 'center', width: PAGE_W }
         );
 

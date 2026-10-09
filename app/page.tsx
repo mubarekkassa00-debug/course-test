@@ -55,9 +55,9 @@ const translations = {
     hero: {
       badge: 'Trusted Islamic Learning Platform',
       titlePart1: 'Draw closer to Allah through the light of knowledge',
-      titlePart2: 'with Basira',
+      titlePart2: 'with Istibsar',
       subtitle:
-        'Following the Prophet’s ﷺ prayer — “My Lord, increase me in knowledge” — Basira delivers the authentic knowledge of the Quran and Sunnah with excellence, wisdom, and love to every Muslim home.',
+        'Following the Prophet’s ﷺ prayer — “My Lord, increase me in knowledge” — Istibsar delivers the authentic knowledge of the Quran and Sunnah with excellence, wisdom, and love to every Muslim home.',
       getStarted: 'Get Started',
       exploreCourses: 'Explore Courses',
       noCreditCard: 'No credit card required',
@@ -91,7 +91,7 @@ const translations = {
       badge: 'Everything You Need',
       title: 'One platform. Complete Islamic learning.',
       subtitle:
-        'From the Quran to classical texts and verified certificates, Basira gives you the tools to grow in knowledge — anywhere, anytime, for the sake of Allah.',
+        'From the Quran to classical texts and verified certificates, Istibsar gives you the tools to grow in knowledge — anywhere, anytime, for the sake of Allah.',
       items: [
         {
           title: 'Authentic Quran & Tajweed',
@@ -172,15 +172,15 @@ const translations = {
         { href: '/courses', label: 'Courses' },
         { href: '/quran', label: 'Quran Center' },
         { href: '/library', label: 'Digital Library' },
-        { href: '/about', label: 'About Basira' },
+        { href: '/about', label: 'About Istibsar' },
       ],
       accountLinks: [
         { href: '/login', label: 'Sign In' },
         { href: '/register', label: 'Create Account' },
-        { href: '/about', label: 'About Basira' },
+        { href: '/about', label: 'About Istibsar' },
         { href: '/contact', label: 'Contact' },
       ],
-      copyright: '© {year} Basira · ባሲራ. All rights reserved.',
+      copyright: '© {year} Istibsar · እስቲብሳር. All rights reserved.',
       privacy: 'Privacy',
       terms: 'Terms',
       telegram: 'Telegram',
@@ -201,9 +201,9 @@ const translations = {
     hero: {
       badge: 'የታመነ የኢስላማዊ ትምህርት መድረክ',
       titlePart1: 'በእውቀት ብርሃን ወደ አላህ ይቅረቡ',
-      titlePart2: 'ከባሲራ ጋር',
+      titlePart2: 'ከእስቲብሳር ጋር',
       subtitle:
-        '«ጌታዬ ሆይ! እውቀትን ጨምርልኝ» የሚለውን የነቢዩን (ሰ.ዐ.ወ) ጸሎት በመከተል፣ ባሲራ ትክክለኛውን የቁርአንና የሱና እውቀት በጥራት፣ በጥበብና በፍቅር ወደ እያንዳንዱ ሙስሊም ቤት ያደርሳል።',
+        '«ጌታዬ ሆይ! እውቀትን ጨምርልኝ» የሚለውን የነቢዩን (ሰ.ዐ.ወ) ጸሎት በመከተል፣ እስቲብሳር ትክክለኛውን የቁርአንና የሱና እውቀት በጥራት፣ በጥበብና በፍቅር ወደ እያንዳንዱ ሙስሊም ቤት ያደርሳል።',
       getStarted: 'ይጀምሩ',
       exploreCourses: 'ኮርሶችን ያስሱ',
       noCreditCard: 'ክሬዲት ካርድ አያስፈልግም',
@@ -237,7 +237,7 @@ const translations = {
       badge: 'የሚያገኙት ሁሉ',
       title: 'አንድ መድረክ። ሙሉ የኢስላማዊ ትምህርት።',
       subtitle:
-        'ከቁርአን እስከ ጥንታዊ ጽሑፎችና የተረጋገጡ ሰርተፊኬቶች ድረስ፣ ባሲራ ለአላህ ፈቃድ በእውቀት ለማደግ የሚያስፈልጉ መሳሪያዎችን ይሰጥዎታል — በየትኛውም ቦታ፣ በየትኛውም ጊዜ።',
+        'ከቁርአን እስከ ጥንታዊ ጽሑፎችና የተረጋገጡ ሰርተፊኬቶች ድረስ፣ እስቲብሳር ለአላህ ፈቃድ በእውቀት ለማደግ የሚያስፈልጉ መሳሪያዎችን ይሰጥዎታል — በየትኛውም ቦታ፣ በየትኛውም ጊዜ።',
       items: [
         {
           title: 'ትክክለኛ ቁርአንና ተጅዊድ',
@@ -262,7 +262,7 @@ const translations = {
       ],
     },
     stats: {
-      badge: 'የባሲራ ተጽዕኖ',
+      badge: 'የእስቲብሳር ተጽዕኖ',
       title: 'በቁጥር የሚታይ እድገት',
       subtitle:
         'እያንዳንዱ ቁጥር አንድ ተማሪን፣ አንድ ትምህርትንና በእውቀት ወደ አላህ የሚቀርብን አንድ ልብን ይወክላል።',
@@ -282,7 +282,7 @@ const translations = {
         {
           question: 'የትምህርቱ ክፍያ ስንት ነው?',
           answer:
-            'የባሲራ ትምህርቶች ከፍተኛ ጥራት ያላቸው ሆኖ ሳለ፣ የፕላትፎርሙን የቴክኖሎጂ ጥገናና ቀጣይነት ያለው አገልግሎት ለማስቀጠል ሲባል በጣም አነስተኛ እና ምቹ በሆነ የ 250 ብር ብቻ ክፍያ የቀረበ ነው። ይህ ክፍያ ሙሉ የትምህርት ቁሳቁሶችን እና የማጠናቀቂያ ሰርቲፊኬትን ያካትታል።',
+            'የእስቲብሳር ትምህርቶች ከፍተኛ ጥራት ያላቸው ሆኖ ሳለ፣ የፕላትፎርሙን የቴክኖሎጂ ጥገናና ቀጣይነት ያለው አገልግሎት ለማስቀጠል ሲባል በጣም አነስተኛ እና ምቹ በሆነ የ 250 ብር ብቻ ክፍያ የቀረበ ነው። ይህ ክፍያ ሙሉ የትምህርት ቁሳቁሶችን እና የማጠናቀቂያ ሰርቲፊኬትን ያካትታል።',
         },
         {
           question: 'በስልክ መከታተል ይቻላል?',
@@ -318,15 +318,15 @@ const translations = {
         { href: '/courses', label: 'ኮርሶች' },
         { href: '/quran', label: 'የቁርአን ማዕከል' },
         { href: '/library', label: 'ዲጂታል ቤተ መጻሕፍት' },
-        { href: '/about', label: 'ስለ ባሲራ' },
+        { href: '/about', label: 'ስለ እስቲብሳር' },
       ],
       accountLinks: [
         { href: '/login', label: 'ይግቡ' },
         { href: '/register', label: 'አካውንት ይፍጠሩ' },
-        { href: '/about', label: 'ስለ ባሲራ' },
+        { href: '/about', label: 'ስለ እስቲብሳር' },
         { href: '/contact', label: 'አግኙን' },
       ],
-      copyright: '© {year} ባሲራ · Basira. መብቱ በህግ የተጠበቀ ነው።',
+      copyright: '© {year} እስቲብሳር · Istibsar. መብቱ በህግ የተጠበቀ ነው።',
       privacy: 'ግላዊነት',
       terms: 'ውሎች',
       telegram: 'ቴሌግራም',
@@ -465,17 +465,17 @@ export default function LandingPage() {
             <Link
               href="/"
               className="flex items-center gap-2.5 flex-shrink-0"
-              aria-label="Basira home"
+              aria-label="Istibsar home"
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
                 <GraduationCap className="h-6 w-6 text-white" />
               </div>
               <div className="leading-tight">
                 <p className="text-base font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 to-emerald-800 dark:from-emerald-300 dark:to-emerald-500 bg-clip-text text-transparent">
-                  ባሲራ
+                  እስቲብሳር
                 </p>
                 <p className="text-[10px] font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Basira
+                  Istibsar
                 </p>
               </div>
             </Link>
@@ -1025,10 +1025,10 @@ export default function LandingPage() {
                 </div>
                 <div className="leading-tight">
                   <p className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
-                    ባሲራ
+                    እስቲብሳር
                   </p>
                   <p className="text-[10px] font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    Basira
+                    Istibsar
                   </p>
                 </div>
               </Link>

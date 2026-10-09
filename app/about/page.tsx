@@ -33,10 +33,10 @@ const translations = {
       langToggle: 'EN',
     },
     hero: {
-      badge: 'ስለ ባሲራ',
-      title: 'ባሲራ — የብርሃንና የእውቀት ማዕከል',
+      badge: 'ስለ እስቲብሳር',
+      title: 'እስቲብሳር — የብርሃንና የእውቀት ማዕከል',
       subtitle:
-        'እውቀት ብርሃን ነው፤ ልብን የሚያበራ፣ መንገድን የሚያቀርብና ባሪያን ወደ ጌታው የሚያቀርብ የሱና ሀብት ነው። ባሲራ ይህን ብርሃን ለእያንዳንዱ ሙስሊም ቤት በጥራት፣ በጥበብና በፍቅር ለማድረስ የተቋቋመ የመስመር ላይ መድረክ ነው።',
+        'እውቀት ብርሃን ነው፤ ልብን የሚያበራ፣ መንገድን የሚያቀርብና ባሪያን ወደ ጌታው የሚያቀርብ የሱና ሀብት ነው። እስቲብሳር ይህን ብርሃን ለእያንዳንዱ ሙስሊም ቤት በጥራት፣ በጥበብና በፍቅር ለማድረስ የተቋቋመ የመስመር ላይ መድረክ ነው።',
       backHome: 'ወደ መነሻ ገጽ ይመለሱ',
       register: 'ይመዝገቡ',
     },
@@ -75,7 +75,7 @@ const translations = {
       badge: 'የእኛ እሴቶች',
       title: 'በእነዚህ ዘላለማዊ እሴቶች ላይ ተመስርተናል',
       subtitle:
-        'ባሲራ በቁርአንና በሱና መሠረት የተገነቡ ጽኑ እሴቶችን ተሸክሞ ይጓዛል — እያንዳንዱ ትምህርት፣ እያንዳንዱ ግንኙነትና እያንዳንዱ ጥረታችን እነዚህን መርሆች ያካትታል።',
+        'እስቲብሳር በቁርአንና በሱና መሠረት የተገነቡ ጽኑ እሴቶችን ተሸክሞ ይጓዛል — እያንዳንዱ ትምህርት፣ እያንዳንዱ ግንኙነትና እያንዳንዱ ጥረታችን እነዚህን መርሆች ያካትታል።',
       items: [
         {
           title: 'ኢክላስ',
@@ -104,8 +104,8 @@ const translations = {
       ],
     },
     features: {
-      badge: 'የባሲራ ጠቀሜታዎች',
-      title: 'ባሲራን ለምን ይመርጣሉ?',
+      badge: 'የእስቲብሳር ጠቀሜታዎች',
+      title: 'እስቲብሳርን ለምን ይመርጣሉ?',
       subtitle:
         'ለዘመናዊ ተማሪዎች የተነደፉ ጠንካራ ባህሪያት — ትክክለኛ እውቀትን በቀላሉ፣ በራስዎ ፍጥነትና በየትኛውም ቦታ ማግኘት እንዲችሉ።',
       items: [
@@ -152,10 +152,10 @@ const translations = {
       langToggle: 'አማርኛ',
     },
     hero: {
-      badge: 'About Basira',
-      title: 'Basira — A Center of Light and Knowledge',
+      badge: 'About Istibsar',
+      title: 'Istibsar — A Center of Light and Knowledge',
       subtitle:
-        'Knowledge is light — it illuminates the heart, straightens the path, and draws the servant closer to his Lord. Basira is an online platform established to deliver this light to every Muslim home with excellence, wisdom, and love.',
+        'Knowledge is light — it illuminates the heart, straightens the path, and draws the servant closer to his Lord. Istibsar is an online platform established to deliver this light to every Muslim home with excellence, wisdom, and love.',
       backHome: 'Back to Home',
       register: 'Register',
     },
@@ -194,7 +194,7 @@ const translations = {
       badge: 'Our Core Values',
       title: 'Built upon timeless principles',
       subtitle:
-        'Basira carries firm values rooted in the Quran and Sunnah — every lesson, every interaction, and every effort we make embodies these principles.',
+        'Istibsar carries firm values rooted in the Quran and Sunnah — every lesson, every interaction, and every effort we make embodies these principles.',
       items: [
         {
           title: 'Ikhlas',
@@ -223,8 +223,8 @@ const translations = {
       ],
     },
     features: {
-      badge: 'Why Basira',
-      title: 'Why choose Basira?',
+      badge: 'Why Istibsar',
+      title: 'Why choose Istibsar?',
       subtitle:
         'Powerful features designed for the modern student — so you can access authentic knowledge easily, at your own pace, from anywhere.',
       items: [
@@ -307,17 +307,17 @@ export default function AboutPage() {
             <Link
               href="/"
               className="flex items-center gap-2.5 flex-shrink-0"
-              aria-label="Basira home"
+              aria-label="Istibsar home"
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-lg shadow-emerald-900/20">
                 <GraduationCap className="h-6 w-6 text-white" />
               </div>
               <div className="leading-tight">
                 <p className="text-base font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 to-emerald-800 dark:from-emerald-300 dark:to-emerald-500 bg-clip-text text-transparent">
-                  ባሲራ
+                  እስቲብሳር
                 </p>
                 <p className="text-[10px] font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Basira
+                  Istibsar
                 </p>
               </div>
             </Link>
@@ -685,7 +685,7 @@ export default function AboutPage() {
               </div>
               <div className="leading-tight">
                 <p className="text-sm font-extrabold tracking-tight text-slate-900 dark:text-white">
-                  ባሲራ
+                  እስቲብሳር
                 </p>
                 <p className="text-[10px] font-medium uppercase tracking-widest text-slate-500 dark:text-slate-400">
                   {t.footer.tagline}
@@ -712,7 +712,7 @@ export default function AboutPage() {
 
           <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 text-center">
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              © {new Date().getFullYear()} Basira · ባሲራ. {t.footer.rights}
+              © {new Date().getFullYear()} Istibsar · እስቲብሳር. {t.footer.rights}
             </p>
           </div>
         </div>

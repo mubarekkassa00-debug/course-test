@@ -317,7 +317,7 @@ function buildCertificateFilename(studentName: string): string {
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^A-Za-z0-9_-]/g, '');
-  return `Basira_Certificate_${safe || 'Student'}.pdf`;
+  return `Istibsar_Certificate_${safe || 'Student'}.pdf`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,17 +1010,17 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             <Image
               src="/logo.png"
-              alt="Basira Logo"
+              alt="Istibsar Logo"
               width={40}
               height={40}
               className="rounded-xl object-contain"
             />
             <div>
               <h1 className="text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 to-emerald-800 dark:from-emerald-300 dark:to-emerald-500 bg-clip-text text-transparent">
-                ባሲራ
+                እስቲብሳር
               </h1>
               <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 -mt-0.5">
-                Basira Dashboard
+                Istibsar Dashboard
               </p>
             </div>
           </div>
@@ -1667,7 +1667,7 @@ export default function DashboardPage() {
 
         {/* Footer note */}
         <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-          © {new Date().getFullYear()} ባሲራ · Basira
+          © {new Date().getFullYear()} እስቲብሳር · Istibsar
         </p>
       </div>
     </div>
