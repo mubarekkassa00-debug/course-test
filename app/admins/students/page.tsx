@@ -119,6 +119,8 @@ interface StudentRow {
   breakdown: CourseBreakdown[];
   /** Latest quiz attempt timestamp — used to compute "active today". */
   lastActivityAt: string | null;
+  /** Flat, chronological list of every lesson attempt (for score chips). */
+  flatLessons: LessonEntry[];
 }
 
 type FilterKey = 'all' | 'in_progress' | 'completed';
@@ -270,6 +272,20 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
   return breakdowns;
 }
 
+/** Flatten every lesson across all courses into one chronological list. */
+function buildFlatLessons(breakdown: CourseBreakdown[]): LessonEntry[] {
+  const all: LessonEntry[] = [];
+  for (const b of breakdown) {
+    for (const l of b.lessons) all.push(l);
+  }
+  all.sort((a, b) => {
+    const ta = a.date ? new Date(a.date).getTime() : 0;
+    const tb = b.date ? new Date(b.date).getTime() : 0;
+    return ta - tb;
+  });
+  return all;
+}
+
 function downloadCSV(rows: StudentRow[]) {
   const headers = [
     'ስም',
@@ -367,12 +383,16 @@ export default function AdminStudentsPage() {
   const [selected, setSelected] = useState<StudentRow | null>(null);
 
   // -------------------------------------------------------------------------
-  // NEW: Pending-payments count (drives the second stats card)
+  // Pending-payments count + the set of user_ids with pending payments.
+  // The count drives the stats card; the set drives the quick-filter.
   // -------------------------------------------------------------------------
   const [pendingPayments, setPendingPayments] = useState(0);
+  const [pendingPaymentUserIds, setPendingPaymentUserIds] = useState<
+    Set<string>
+  >(new Set());
 
   // -------------------------------------------------------------------------
-  // NEW: Quick-filter overlay (driven by clicking the stats cards)
+  // Quick-filter overlay (driven by clicking the stats cards)
   //
   //   'none'              → no additional constraint (default)
   //   'pending_payments'  → show only students with a pending payment
@@ -382,7 +402,7 @@ export default function AdminStudentsPage() {
   const [quickFilter, setQuickFilter] = useState<QuickFilterKey>('none');
 
   // -------------------------------------------------------------------------
-  // NEW: Announcement composer modal state
+  // Announcement composer modal state
   // -------------------------------------------------------------------------
   const [announceOpen, setAnnounceOpen] = useState(false);
   const [announceTitle, setAnnounceTitle] = useState('');
@@ -398,23 +418,12 @@ export default function AdminStudentsPage() {
 
   // -------------------------------------------------------------------------
   // 1. STRICT RBAC — AUTH + ADMIN GUARD
-  //
-  //   Flow:
-  //     a) supabase.auth.getUser() — authoritative session check.
-  //        → no user → router.replace('/login')  (never clears authLoading,
-  //          so the spinner stays up until the redirect completes).
-  //     b) SELECT role FROM profiles WHERE id = user.id
-  //        → query failure → authError is set + authLoading cleared.
-  //        → role !== 'admin' → router.replace('/dashboard')
-  //          (authLoading stays true so nothing flashes before navigation).
-  //        → role === 'admin' → set userRole, clear authLoading.
   // -------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
 
     const verifyAdmin = async () => {
       try {
-        // ---------- (a) SESSION CHECK ----------
         const {
           data: { user },
           error: userErr,
@@ -424,14 +433,10 @@ export default function AdminStudentsPage() {
 
         if (userErr || !user) {
           console.error('DEBUG_SUPABASE_ERROR:', userErr);
-          // Do NOT clear authLoading — the spinner stays up until the
-          // router.replace('/login') navigation completes, guaranteeing
-          // no protected content ever flashes.
           router.replace('/login');
           return;
         }
 
-        // ---------- (b) ROLE LOOKUP ----------
         const { data: profile, error: profileErr } = await supabase
           .from('profiles')
           .select('role')
@@ -453,14 +458,10 @@ export default function AdminStudentsPage() {
             : null;
 
         if (role !== 'admin') {
-          // Non-admin (student / null role) → bounce to dashboard.
-          // Keep authLoading true so the spinner remains until the
-          // redirect completes and no protected data flashes.
           router.replace('/dashboard');
           return;
         }
 
-        // ---------- (c) ADMIN CONFIRMED ----------
         setUserRole('admin');
         setAuthLoading(false);
       } catch (err) {
@@ -480,8 +481,6 @@ export default function AdminStudentsPage() {
 
   // -------------------------------------------------------------------------
   // 2. SAFE DATA LOAD
-  //
-  // Gated on userRole === 'admin' so the fetch never runs for non-admins.
   // -------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     setDataLoading(true);
@@ -582,12 +581,11 @@ export default function AdminStudentsPage() {
       quizRows = [];
     }
 
-    // ---- B2) PENDING PAYMENTS (optional, SILENT on failure) ----
-    //
-    // We only need a COUNT of pending payment verifications for the stats
-    // card. Failure here is non-fatal — the count falls back to 0.
+    // ---- B2) PENDING PAYMENTS: count + user_id set (optional, SILENT) ----
     let pendingCount = 0;
+    let pendingIds = new Set<string>();
     try {
+      // Count query (unchanged behaviour)
       const { count, error: payErr } = await supabase
         .from('payments')
         .select('id', { count: 'exact', head: true })
@@ -601,13 +599,34 @@ export default function AdminStudentsPage() {
       } else {
         pendingCount = typeof count === 'number' ? count : 0;
       }
+
+      // Additional query — fetch the actual pending user_ids so the
+      // quick-filter card can narrow the tables to those students.
+      // This does NOT modify any existing query.
+      const { data: pendingRows, error: pendingRowsErr } = await supabase
+        .from('payments')
+        .select('user_id')
+        .eq('status', 'pending');
+
+      if (pendingRowsErr) {
+        console.warn(
+          '[AdminStudents] payments pending user_ids query failed (non-fatal):',
+          pendingRowsErr.message
+        );
+      } else if (pendingRows) {
+        for (const r of pendingRows as Array<Record<string, any>>) {
+          const uid = r?.user_id ? String(r.user_id) : '';
+          if (uid) pendingIds.add(uid);
+        }
+      }
     } catch (payCatch) {
       console.warn(
-        '[AdminStudents] payments pending-count unexpected error (non-fatal):',
+        '[AdminStudents] payments pending unexpected error (non-fatal):',
         payCatch instanceof Error ? payCatch.message : String(payCatch)
       );
     }
     setPendingPayments(pendingCount);
+    setPendingPaymentUserIds(pendingIds);
 
     // ---- Index quiz rows by user ----
     const quizzesByUser = new Map<string, QuizRow[]>();
@@ -665,6 +684,8 @@ export default function AdminStudentsPage() {
           }
         }
 
+        const flatLessons = buildFlatLessons(breakdown);
+
         return {
           id: p.id,
           fullName: p.full_name ?? 'ያልተጠቀሰ',
@@ -681,6 +702,7 @@ export default function AdminStudentsPage() {
           currentLessonNumber,
           breakdown,
           lastActivityAt,
+          flatLessons,
         };
       });
 
@@ -698,7 +720,6 @@ export default function AdminStudentsPage() {
   // 3. DERIVED DATE BOUNDARIES — used by the quick-filter logic and the
   //    "active today" / "new this week" stats.
   // -------------------------------------------------------------------------
-
   const todayStartMs = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -742,12 +763,7 @@ export default function AdminStudentsPage() {
         const t = new Date(s.registeredAt).getTime();
         if (!Number.isFinite(t) || t < weekAgoMs) return false;
       } else if (quickFilter === 'pending_payments') {
-        // Without a per-user join to the payments table, we cannot
-        // perfectly match pending rows to specific students here. As a
-        // safe approximation we simply show all students, but keep the
-        // quick-filter label to signal to the admin that a pending
-        // payments view is expected. (See the "pending payments" banner
-        // in the header area for the aggregate count.)
+        if (!pendingPaymentUserIds.has(s.id)) return false;
       }
 
       // ---- Regular filter-tab ----
@@ -766,7 +782,15 @@ export default function AdminStudentsPage() {
         s.email.toLowerCase().includes(q)
       );
     });
-  }, [students, search, filter, quickFilter, todayStartMs, weekAgoMs]);
+  }, [
+    students,
+    search,
+    filter,
+    quickFilter,
+    todayStartMs,
+    weekAgoMs,
+    pendingPaymentUserIds,
+  ]);
 
   // -------------------------------------------------------------------------
   // 5. STATS
@@ -823,13 +847,6 @@ export default function AdminStudentsPage() {
 
   // -------------------------------------------------------------------------
   // 7. ANNOUNCEMENT SENDER — submits the composed announcement.
-  //
-  // The endpoint is `/api/admin/announce` (POST). We send the title,
-  // message body, and the recipient audience. Failures are surfaced
-  // inline inside the modal so the admin can retry.
-  //
-  // NOTE: This UI is fully functional; it will simply report a friendly
-  // error if the backend endpoint is not yet deployed.
   // -------------------------------------------------------------------------
   const handleSendAnnouncement = useCallback(async () => {
     if (announceSending) return;
@@ -905,15 +922,8 @@ export default function AdminStudentsPage() {
   ]);
 
   // -------------------------------------------------------------------------
-  // 8. RBAC GATES — LOADING SPINNER / ERROR
-  //
-  // CRITICAL: The full admin UI (header, stats, table, modal) is rendered
-  // ONLY after `userRole === 'admin'` is explicitly confirmed. Until then,
-  // a full-screen loading state is shown so no protected content flashes.
+  // 8. RBAC GATES
   // -------------------------------------------------------------------------
-
-  // (a) Verify-in-progress — spinner stays up until admin is confirmed
-  //     OR until a redirect (login/dashboard) completes.
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -930,7 +940,6 @@ export default function AdminStudentsPage() {
     );
   }
 
-  // (b) Role-lookup error — no admin UI is ever rendered in this branch.
   if (authError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
@@ -955,10 +964,6 @@ export default function AdminStudentsPage() {
     );
   }
 
-  // (c) Explicit admin gate — renders nothing (spinner) unless the role
-  //     has been confirmed. This is the final safety net that guarantees
-  //     the protected UI can NEVER flash for a non-admin, even during the
-  //     brief moment between state updates and the router redirect.
   if (userRole !== 'admin') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -973,7 +978,7 @@ export default function AdminStudentsPage() {
   }
 
   // -------------------------------------------------------------------------
-  // 9. MAIN RENDER — reached only when userRole === 'admin'.
+  // 9. MAIN RENDER
   // -------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -1038,7 +1043,7 @@ export default function AdminStudentsPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* ---------- Primary Stats (4 Interactive Cards) ---------- */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-          {/* Card 1 — Total students (click → show all) */}
+          {/* Card 1 — Total students (click → reset to show all) */}
           <StatCard
             label="ጠቅላላ ተማሪዎች"
             value={String(stats.totalStudents)}
@@ -1094,7 +1099,7 @@ export default function AdminStudentsPage() {
               {quickFilter === 'new_this_week' &&
                 'በዚህ ሳምንት አዲስ የተመዘገቡ ተማሪዎች'}
               {quickFilter === 'pending_payments' &&
-                'ማረጋገጫ የሚጠብቁ ክፍያዎች አሉ'}
+                'ማረጋገጫ የሚጠብቁ ክፍያዎች ያላቸው ተማሪዎች'}
             </span>
             <button
               type="button"
@@ -1162,7 +1167,6 @@ export default function AdminStudentsPage() {
             ))}
           </div>
 
-          {/* CSV export — sleek secondary outline button */}
           <button
             type="button"
             onClick={handleExport}
@@ -1198,151 +1202,285 @@ export default function AdminStudentsPage() {
           </div>
         )}
 
-        {/* ---------- Table ---------- */}
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-          {dataLoading ? (
-            <TableSkeleton />
-          ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <Users className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                ምንም ተማሪ አልተገኘም።
-              </p>
+        {/* ================================================================ */}
+        {/* SECTION 1 — ጠቅላላ ተማሪዎች (Contact & Registration Overview)        */}
+        {/* ================================================================ */}
+        <section className="mb-8">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                <Users className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
+                  ጠቅላላ ተማሪዎች
+                </h2>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  የተማሪዎች ስም፣ የተመዘገቡበት ቀን፣ ስልክ እና ኢሜይል
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1000px]">
-                <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
-                  <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                    {/* Sticky first header column */}
-                    <th className="sticky left-0 z-20 bg-slate-50 dark:bg-slate-800/60 px-5 py-3 font-semibold shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
-                      ተማሪ
-                    </th>
-                    <th className="px-5 py-3 font-semibold">ስልክ / ኢሜይል</th>
-                    <th className="px-5 py-3 font-semibold">
-                      የአሁን ኪታብ እና ደርስ
-                    </th>
-                    <th className="px-5 py-3 font-semibold">አማካይ ነጥብ</th>
-                    <th className="px-5 py-3 font-semibold">የጨረሷቸው</th>
-                    <th className="px-5 py-3 font-semibold text-right">
-                      ዝርዝር
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((s) => (
-                    <tr
-                      key={s.id}
-                      onClick={() => setSelected(s)}
-                      className="group border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
-                    >
-                      {/* Student — sticky first column */}
-                      <td className="sticky left-0 z-10 bg-white dark:bg-slate-900 group-hover:bg-slate-50 dark:group-hover:bg-slate-800 px-5 py-4 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
-                            {s.fullName.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold truncate max-w-[180px]">
-                              {s.fullName}
-                            </p>
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                              {formatDateAmh(s.registeredAt)}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
+            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              {filtered.length} / {students.length}
+            </span>
+          </div>
 
-                      {/* Phone / Email */}
-                      <td className="px-5 py-4">
-                        <div className="flex flex-col gap-1">
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+            {dataLoading ? (
+              <ContactTableSkeleton />
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-14 gap-3">
+                <Users className="h-10 w-10 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  ምንም ተማሪ አልተገኘም።
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[820px]">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
+                    <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      <th className="px-5 py-3 font-semibold">ተማሪ</th>
+                      <th className="px-5 py-3 font-semibold">
+                        የተመዘገቡበት ቀን
+                      </th>
+                      <th className="px-5 py-3 font-semibold">ስልክ ቁጥር</th>
+                      <th className="px-5 py-3 font-semibold">ኢሜይል</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((s) => (
+                      <tr
+                        key={s.id}
+                        className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                      >
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
+                              {s.fullName.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold truncate max-w-[220px]">
+                                {s.fullName}
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {s.role === 'student' ? 'ተማሪ' : s.role}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 tabular-nums">
+                            <Calendar className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                            {formatDateAmh(s.registeredAt)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4">
                           {s.phone ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-mono text-slate-700 dark:text-slate-300">
-                              <Phone className="h-3 w-3 text-slate-400 flex-shrink-0" />
+                            <span className="inline-flex items-center gap-1.5 text-sm font-mono text-slate-700 dark:text-slate-300">
+                              <Phone className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
                               {s.phone}
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 italic">
+                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
                               ስልክ አልተመዘገበም
                             </span>
                           )}
-                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 max-w-[220px]">
-                            <Mail className="h-3 w-3 text-slate-400 flex-shrink-0" />
-                            <span className="truncate">{s.email || '—'}</span>
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Current kitab / lesson */}
-                      <td className="px-5 py-4">
-                        {s.currentCourseName ? (
-                          <div className="flex flex-col">
-                            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
-                              <BookOpen className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                              {s.currentCourseName}
+                        </td>
+                        <td className="px-5 py-4">
+                          {s.email ? (
+                            <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 max-w-[280px]">
+                              <Mail className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                              <span className="truncate">{s.email}</span>
                             </span>
-                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                              ደርስ {s.currentLessonNumber ?? 0}
+                          ) : (
+                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                              ኢሜይል አልተመዘገበም
                             </span>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-slate-400 dark:text-slate-500">
-                            አልጀመሩም
-                          </span>
-                        )}
-                      </td>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
 
-                      {/* Average score */}
-                      <td className="px-5 py-4">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">
-                            {s.attemptsCount > 0 ? `${s.averageScore}%` : '—'}
-                          </span>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                            {s.attemptsCount > 0
-                              ? `${s.attemptsCount} ሙከራ`
-                              : 'ምንም ፈተና አልተወሰደም'}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Passed kitabs — badge color & icon logic */}
-                      <td className="px-5 py-4">
-                        {s.passedCount > 0 ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle className="h-3 w-3" />
-                            {s.passedCount} / {s.totalCourses}
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 px-2.5 py-0.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                            0 / {s.totalCourses}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Row action */}
-                      <td className="px-5 py-4 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelected(s);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
-                        >
-                          ዝርዝር ውጤት እይ
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* ================================================================ */}
+        {/* SECTION 2 — የተማሪዎች መቆጣጠሪያ (Progress & Score Monitor)           */}
+        {/* ================================================================ */}
+        <section>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300">
+                <GraduationCap className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
+                  የተማሪዎች መቆጣጠሪያ
+                </h2>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  የትምህርት ሂደት፣ የአሁን ኪታብ/ደርስ እና የፈተና ውጤቶች
+                </p>
+              </div>
             </div>
-          )}
-        </div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              {filtered.length} ተማሪ
+            </span>
+          </div>
 
-        <p className="mt-4 text-center text-xs text-slate-400 dark:text-slate-500">
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+            {dataLoading ? (
+              <ContactTableSkeleton />
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-14 gap-3">
+                <GraduationCap className="h-10 w-10 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  ምንም የትምህርት ሂደት አልተገኘም።
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1020px]">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
+                    <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      <th className="px-5 py-3 font-semibold">ተማሪ</th>
+                      <th className="px-5 py-3 font-semibold">
+                        አሁን ያሉበት ኪታብ እና ደርስ
+                      </th>
+                      <th className="px-5 py-3 font-semibold">
+                        የትምህርት ሂደት %
+                      </th>
+                      <th className="px-5 py-3 font-semibold">
+                        የፈተና ውጤቶች
+                      </th>
+                      <th className="px-5 py-3 font-semibold text-right">
+                        እርምጃ
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((s) => (
+                      <tr
+                        key={`monitor-${s.id}`}
+                        className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                      >
+                        {/* Student */}
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
+                              {s.fullName.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold truncate max-w-[200px]">
+                                {s.fullName}
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {s.attemptsCount > 0
+                                  ? `${s.attemptsCount} ሙከራ`
+                                  : 'ምንም ፈተና አልተወሰደም'}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Current kitab + lesson */}
+                        <td className="px-5 py-4">
+                          {s.currentCourseName ? (
+                            <div className="flex flex-col">
+                              <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
+                                <BookOpen className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                                {s.currentCourseName}
+                              </span>
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                ደርስ {s.currentLessonNumber ?? 0}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400 dark:text-slate-500">
+                              አልጀመሩም
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Progress % */}
+                        <td className="px-5 py-4">
+                          <div className="flex flex-col gap-1.5 min-w-[130px]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sm font-bold tabular-nums text-slate-900 dark:text-white">
+                                {s.progressPercent}%
+                              </span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                                {s.passedCount}/{s.totalCourses}
+                              </span>
+                            </div>
+                            <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
+                                style={{ width: `${s.progressPercent}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Quiz score chips */}
+                        <td className="px-5 py-4">
+                          {s.flatLessons.length === 0 ? (
+                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                              —
+                            </span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5 max-w-[280px]">
+                              {s.flatLessons.slice(-5).map((l, idx) => (
+                                <span
+                                  key={idx}
+                                  className={[
+                                    'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums border',
+                                    l.passed
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/60'
+                                      : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/60',
+                                  ].join(' ')}
+                                  title={
+                                    l.date
+                                      ? formatDateAmh(l.date)
+                                      : undefined
+                                  }
+                                >
+                                  {l.score}/{l.total}
+                                </span>
+                              ))}
+                              {s.flatLessons.length > 5 && (
+                                <span className="inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800">
+                                  +{s.flatLessons.length - 5}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Action */}
+                        <td className="px-5 py-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setSelected(s)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 dark:border-emerald-500 bg-transparent px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                          >
+                            ዝርዝር እይ
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <p className="mt-5 text-center text-xs text-slate-400 dark:text-slate-500">
           {filtered.length} ከ {students.length} ተማሪዎች ይታያሉ
         </p>
       </main>
@@ -1472,11 +1610,11 @@ function SmallStat({
   );
 }
 
-function TableSkeleton() {
+function ContactTableSkeleton() {
   return (
     <div className="p-5 space-y-3">
-      <div className="grid grid-cols-6 gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-        {[1, 2, 3, 4, 5, 6].map((i) => (
+      <div className="grid grid-cols-4 gap-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+        {[1, 2, 3, 4].map((i) => (
           <div
             key={i}
             className="h-3 rounded bg-slate-100 dark:bg-slate-800 animate-pulse"
@@ -1484,7 +1622,7 @@ function TableSkeleton() {
         ))}
       </div>
       {[1, 2, 3, 4, 5].map((row) => (
-        <div key={row} className="grid grid-cols-6 gap-4 py-3">
+        <div key={row} className="grid grid-cols-4 gap-4 py-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse" />
             <div className="flex-1 space-y-2">
@@ -1492,17 +1630,9 @@ function TableSkeleton() {
               <div className="h-2.5 w-16 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
             </div>
           </div>
-          <div className="space-y-2">
-            <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
-            <div className="h-2.5 w-32 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
-          </div>
-          <div className="space-y-2">
-            <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
-            <div className="h-2.5 w-16 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
-          </div>
-          <div className="h-3 w-12 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
-          <div className="h-6 w-16 rounded-full bg-slate-100 dark:bg-slate-800 animate-pulse" />
-          <div className="h-3 w-20 rounded bg-slate-100 dark:bg-slate-800 animate-pulse ml-auto" />
+          <div className="h-3 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse my-auto" />
+          <div className="h-3 w-28 rounded bg-slate-100 dark:bg-slate-800 animate-pulse my-auto" />
+          <div className="h-3 w-40 rounded bg-slate-100 dark:bg-slate-800 animate-pulse my-auto" />
         </div>
       ))}
     </div>
