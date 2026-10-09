@@ -2692,7 +2692,7 @@ function AnnouncementModal({
             {sending ? 'በመላክ ላይ...' : 'ላክ'}
           </button>
         </div>
-      </div>
+      </div>.
     </div>
   );
 }
