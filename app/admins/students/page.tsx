@@ -136,6 +136,14 @@ type QuickFilterKey =
   | 'active_today'
   | 'new_this_week';
 
+/**
+ * Which of the two mutually-exclusive tables is currently displayed.
+ *
+ *   'list'    → ጠቅላላ ተማሪዎች (contact & registration overview)
+ *   'monitor' → የተማሪዎች መቆጣጠሪያ (progress & score monitor)
+ */
+type ActiveView = 'list' | 'monitor';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -381,6 +389,14 @@ export default function AdminStudentsPage() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
   const [selected, setSelected] = useState<StudentRow | null>(null);
+
+  // -------------------------------------------------------------------------
+  // Active view — only ONE of the two tables renders at a time.
+  //
+  //   'list'    → ጠቅላላ ተማሪዎች (contact & registration overview)
+  //   'monitor' → የተማሪዎች መቆጣጠሪያ (progress & score monitor)
+  // -------------------------------------------------------------------------
+  const [activeView, setActiveView] = useState<ActiveView>('list');
 
   // -------------------------------------------------------------------------
   // Pending-payments count + the set of user_ids with pending payments.
@@ -836,13 +852,41 @@ export default function AdminStudentsPage() {
 
   const dismissError = useCallback(() => setErrorMessage(null), []);
 
+  /**
+   * Applies (or toggles off) a quick-filter overlay driven by the top
+   * stats cards, AND forces the active view to the contact-list table so
+   * the user always sees the narrowed result in the expected table.
+   */
   const handleStatCardClick = useCallback((next: QuickFilterKey) => {
+    setActiveView('list');
     setQuickFilter((prev) => (prev === next ? 'none' : next));
     // Reset the regular tab & search so the quick-filter is fully visible.
     if (next !== 'none') {
       setFilter('all');
       setSearch('');
     }
+  }, []);
+
+  /**
+   * Resets every filter and switches to the ጠቅላላ ተማሪዎች contact list.
+   */
+  const handleShowAllStudents = useCallback(() => {
+    setActiveView('list');
+    setQuickFilter('none');
+    setFilter('all');
+    setSearch('');
+  }, []);
+
+  /**
+   * Switches to the የተማሪዎች መቆጣጠሪያ (Student Progress Monitor) table.
+   * Quick-filter overlays are intentionally cleared so the monitor always
+   * renders the full student body for progress review.
+   */
+  const handleShowMonitor = useCallback(() => {
+    setActiveView('monitor');
+    setQuickFilter('none');
+    setFilter('all');
+    setSearch('');
   }, []);
 
   // -------------------------------------------------------------------------
@@ -1042,75 +1086,119 @@ export default function AdminStudentsPage() {
       {/* ================================================================= */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* ---------- Primary Stats (4 Interactive Cards) ---------- */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-          {/* Card 1 — Total students (click → reset to show all) */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
+          {/* Card 1 — Total students (click → show all in the contact list) */}
           <StatCard
             label="ጠቅላላ ተማሪዎች"
             value={String(stats.totalStudents)}
             accent="emerald"
             icon={<Users className="h-5 w-5" />}
-            active={quickFilter === 'none' && filter === 'all' && search === ''}
-            onClick={() => {
-              setQuickFilter('none');
-              setFilter('all');
-              setSearch('');
-            }}
+            active={
+              activeView === 'list' &&
+              quickFilter === 'none' &&
+              filter === 'all' &&
+              search === ''
+            }
+            onClick={handleShowAllStudents}
           />
 
-          {/* Card 2 — Pending payments */}
+          {/* Card 2 — Pending payments (click → filter contact list) */}
           <StatCard
             label="ማረጋገጫ የሚጠብቁ ክፍያዎች"
             value={String(pendingPayments)}
             accent="rose"
             icon={<CreditCard className="h-5 w-5" />}
-            active={quickFilter === 'pending_payments'}
+            active={
+              activeView === 'list' && quickFilter === 'pending_payments'
+            }
             onClick={() => handleStatCardClick('pending_payments')}
           />
 
-          {/* Card 3 — Active today */}
+          {/* Card 3 — Active today (click → filter contact list) */}
           <StatCard
             label="ዛሬ ንቁ የነበሩ"
             value={String(activeTodayCount)}
             accent="sky"
             icon={<Clock className="h-5 w-5" />}
-            active={quickFilter === 'active_today'}
+            active={activeView === 'list' && quickFilter === 'active_today'}
             onClick={() => handleStatCardClick('active_today')}
           />
 
-          {/* Card 4 — New this week */}
+          {/* Card 4 — New this week (click → filter contact list) */}
           <StatCard
             label="በዚህ ሳምንት አዲስ የተመዘገቡ"
             value={String(newThisWeekCount)}
             accent="purple"
             icon={<UserPlus className="h-5 w-5" />}
-            active={quickFilter === 'new_this_week'}
+            active={
+              activeView === 'list' && quickFilter === 'new_this_week'
+            }
             onClick={() => handleStatCardClick('new_this_week')}
           />
         </div>
 
-        {/* ---------- Quick-filter indicator ---------- */}
-        {quickFilter !== 'none' && (
-          <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-2 text-xs">
-            <span className="font-semibold text-emerald-800 dark:text-emerald-300">
-              ንቁ ማጣሪያ፡
-            </span>
-            <span className="text-emerald-900 dark:text-emerald-200">
-              {quickFilter === 'active_today' && 'ዛሬ ንቁ የነበሩ ተማሪዎች'}
-              {quickFilter === 'new_this_week' &&
-                'በዚህ ሳምንት አዲስ የተመዘገቡ ተማሪዎች'}
-              {quickFilter === 'pending_payments' &&
-                'ማረጋገጫ የሚጠብቁ ክፍያዎች ያላቸው ተማሪዎች'}
-            </span>
+        {/* ---------- View Switcher Tabs ---------- */}
+        {/*
+          Two mutually-exclusive views. Only ONE table renders below based
+          on which tab is active. The dedicated "የተማሪዎች መቆጣጠሪያ" tab sits
+          alongside the summary cards so it is always discoverable.
+        */}
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1 shadow-sm">
             <button
               type="button"
-              onClick={() => setQuickFilter('none')}
-              className="ml-auto inline-flex items-center gap-1 rounded-full bg-white dark:bg-slate-900 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+              onClick={handleShowAllStudents}
+              className={[
+                'inline-flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold transition-colors',
+                activeView === 'list'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+              ].join(' ')}
             >
-              <X className="h-3 w-3" />
-              አጥፋ
+              <Users className="h-4 w-4" />
+              ጠቅላላ ተማሪዎች
+            </button>
+
+            <button
+              type="button"
+              onClick={handleShowMonitor}
+              className={[
+                'inline-flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold transition-colors',
+                activeView === 'monitor'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800',
+              ].join(' ')}
+            >
+              <GraduationCap className="h-4 w-4" />
+              የተማሪዎች መቆጣጠሪያ
             </button>
           </div>
-        )}
+
+          {/* Quick-filter indicator — only meaningful in the list view */}
+          {activeView === 'list' && quickFilter !== 'none' && (
+            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-2 text-xs">
+              <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                ንቁ ማጣሪያ፡
+              </span>
+              <span className="text-emerald-900 dark:text-emerald-200">
+                {quickFilter === 'active_today' &&
+                  'ዛሬ ንቁ የነበሩ ተማሪዎች'}
+                {quickFilter === 'new_this_week' &&
+                  'በዚህ ሳምንት አዲስ የተመዘገቡ ተማሪዎች'}
+                {quickFilter === 'pending_payments' &&
+                  'ማረጋገጫ የሚጠብቁ ክፍያዎች ያላቸው ተማሪዎች'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setQuickFilter('none')}
+                className="inline-flex items-center gap-1 rounded-full bg-white dark:bg-slate-900 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/60 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 transition-colors"
+              >
+                <X className="h-3 w-3" />
+                አጥፋ
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* ---------- Secondary Summary Strip ---------- */}
         <div className="mb-5 grid grid-cols-3 gap-3">
@@ -1131,7 +1219,7 @@ export default function AdminStudentsPage() {
           />
         </div>
 
-        {/* ---------- Toolbar ---------- */}
+        {/* ---------- Toolbar (shared by both views) ---------- */}
         <div className="mb-5 flex flex-col lg:flex-row lg:items-center gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -1203,282 +1291,284 @@ export default function AdminStudentsPage() {
         )}
 
         {/* ================================================================ */}
-        {/* SECTION 1 — ጠቅላላ ተማሪዎች (Contact & Registration Overview)        */}
+        {/* ACTIVE VIEW — only ONE table is rendered at a time.              */}
+        {/*                                                                  */}
+        {/*   activeView === 'list'    → ጠቅላላ ተማሪዎች contact list            */}
+        {/*   activeView === 'monitor' → የተማሪዎች መቆጣጠሪያ progress monitor     */}
         {/* ================================================================ */}
-        <section className="mb-8">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
-                <Users className="h-4 w-4" />
+        {activeView === 'list' ? (
+          <section>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                  <Users className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
+                    ጠቅላላ ተማሪዎች
+                  </h2>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    የተማሪዎች ስም፣ የተመዘገቡበት ቀን፣ ስልክ እና ኢሜይል
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
-                  ጠቅላላ ተማሪዎች
-                </h2>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  የተማሪዎች ስም፣ የተመዘገቡበት ቀን፣ ስልክ እና ኢሜይል
-                </p>
-              </div>
+              <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                {filtered.length} / {students.length}
+              </span>
             </div>
-            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-              {filtered.length} / {students.length}
-            </span>
-          </div>
 
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-            {dataLoading ? (
-              <ContactTableSkeleton />
-            ) : filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-14 gap-3">
-                <Users className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  ምንም ተማሪ አልተገኘም።
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[820px]">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
-                    <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                      <th className="px-5 py-3 font-semibold">ተማሪ</th>
-                      <th className="px-5 py-3 font-semibold">
-                        የተመዘገቡበት ቀን
-                      </th>
-                      <th className="px-5 py-3 font-semibold">ስልክ ቁጥር</th>
-                      <th className="px-5 py-3 font-semibold">ኢሜይል</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((s) => (
-                      <tr
-                        key={s.id}
-                        className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                      >
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
-                              {s.fullName.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold truncate max-w-[220px]">
-                                {s.fullName}
-                              </p>
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                                {s.role === 'student' ? 'ተማሪ' : s.role}
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-5 py-4">
-                          <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 tabular-nums">
-                            <Calendar className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
-                            {formatDateAmh(s.registeredAt)}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4">
-                          {s.phone ? (
-                            <span className="inline-flex items-center gap-1.5 text-sm font-mono text-slate-700 dark:text-slate-300">
-                              <Phone className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
-                              {s.phone}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
-                              ስልክ አልተመዘገበም
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-5 py-4">
-                          {s.email ? (
-                            <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 max-w-[280px]">
-                              <Mail className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
-                              <span className="truncate">{s.email}</span>
-                            </span>
-                          ) : (
-                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
-                              ኢሜይል አልተመዘገበም
-                            </span>
-                          )}
-                        </td>
+            <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+              {dataLoading ? (
+                <ContactTableSkeleton />
+              ) : filtered.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-14 gap-3">
+                  <Users className="h-10 w-10 text-slate-300 dark:text-slate-600" />
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    ምንም ተማሪ አልተገኘም።
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[820px]">
+                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
+                      <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        <th className="px-5 py-3 font-semibold">ተማሪ</th>
+                        <th className="px-5 py-3 font-semibold">
+                          የተመዘገቡበት ቀን
+                        </th>
+                        <th className="px-5 py-3 font-semibold">ስልክ ቁጥር</th>
+                        <th className="px-5 py-3 font-semibold">ኢሜይል</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* ================================================================ */}
-        {/* SECTION 2 — የተማሪዎች መቆጣጠሪያ (Progress & Score Monitor)           */}
-        {/* ================================================================ */}
-        <section>
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300">
-                <GraduationCap className="h-4 w-4" />
-              </div>
-              <div>
-                <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
-                  የተማሪዎች መቆጣጠሪያ
-                </h2>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  የትምህርት ሂደት፣ የአሁን ኪታብ/ደርስ እና የፈተና ውጤቶች
-                </p>
-              </div>
+                    </thead>
+                    <tbody>
+                      {filtered.map((s) => (
+                        <tr
+                          key={s.id}
+                          className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                        >
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
+                                {s.fullName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold truncate max-w-[220px]">
+                                  {s.fullName}
+                                </p>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {s.role === 'student' ? 'ተማሪ' : s.role}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 tabular-nums">
+                              <Calendar className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                              {formatDateAmh(s.registeredAt)}
+                            </span>
+                          </td>
+                          <td className="px-5 py-4">
+                            {s.phone ? (
+                              <span className="inline-flex items-center gap-1.5 text-sm font-mono text-slate-700 dark:text-slate-300">
+                                <Phone className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                                {s.phone}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                                ስልክ አልተመዘገበም
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-5 py-4">
+                            {s.email ? (
+                              <span className="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300 max-w-[280px]">
+                                <Mail className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                                <span className="truncate">{s.email}</span>
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                                ኢሜይል አልተመዘገበም
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-              {filtered.length} ተማሪ
-            </span>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-            {dataLoading ? (
-              <ContactTableSkeleton />
-            ) : filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-14 gap-3">
-                <GraduationCap className="h-10 w-10 text-slate-300 dark:text-slate-600" />
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  ምንም የትምህርት ሂደት አልተገኘም።
-                </p>
+          </section>
+        ) : (
+          <section>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300">
+                  <GraduationCap className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
+                    የተማሪዎች መቆጣጠሪያ
+                  </h2>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    የትምህርት ሂደት፣ የአሁን ኪታብ/ደርስ እና የፈተና ውጤቶች
+                  </p>
+                </div>
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[1020px]">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
-                    <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                      <th className="px-5 py-3 font-semibold">ተማሪ</th>
-                      <th className="px-5 py-3 font-semibold">
-                        አሁን ያሉበት ኪታብ እና ደርስ
-                      </th>
-                      <th className="px-5 py-3 font-semibold">
-                        የትምህርት ሂደት %
-                      </th>
-                      <th className="px-5 py-3 font-semibold">
-                        የፈተና ውጤቶች
-                      </th>
-                      <th className="px-5 py-3 font-semibold text-right">
-                        እርምጃ
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((s) => (
-                      <tr
-                        key={`monitor-${s.id}`}
-                        className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
-                      >
-                        {/* Student */}
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
-                              {s.fullName.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold truncate max-w-[200px]">
-                                {s.fullName}
-                              </p>
-                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                                {s.attemptsCount > 0
-                                  ? `${s.attemptsCount} ሙከራ`
-                                  : 'ምንም ፈተና አልተወሰደም'}
-                              </p>
-                            </div>
-                          </div>
-                        </td>
+              <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                {filtered.length} ተማሪ
+              </span>
+            </div>
 
-                        {/* Current kitab + lesson */}
-                        <td className="px-5 py-4">
-                          {s.currentCourseName ? (
-                            <div className="flex flex-col">
-                              <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
-                                <BookOpen className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                                {s.currentCourseName}
-                              </span>
-                              <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                                ደርስ {s.currentLessonNumber ?? 0}
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-slate-400 dark:text-slate-500">
-                              አልጀመሩም
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Progress % */}
-                        <td className="px-5 py-4">
-                          <div className="flex flex-col gap-1.5 min-w-[130px]">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-sm font-bold tabular-nums text-slate-900 dark:text-white">
-                                {s.progressPercent}%
-                              </span>
-                              <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
-                                {s.passedCount}/{s.totalCourses}
-                              </span>
-                            </div>
-                            <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                              <div
-                                className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
-                                style={{ width: `${s.progressPercent}%` }}
-                              />
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Quiz score chips */}
-                        <td className="px-5 py-4">
-                          {s.flatLessons.length === 0 ? (
-                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">
-                              —
-                            </span>
-                          ) : (
-                            <div className="flex flex-wrap gap-1.5 max-w-[280px]">
-                              {s.flatLessons.slice(-5).map((l, idx) => (
-                                <span
-                                  key={idx}
-                                  className={[
-                                    'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums border',
-                                    l.passed
-                                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/60'
-                                      : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/60',
-                                  ].join(' ')}
-                                  title={
-                                    l.date
-                                      ? formatDateAmh(l.date)
-                                      : undefined
-                                  }
-                                >
-                                  {l.score}/{l.total}
-                                </span>
-                              ))}
-                              {s.flatLessons.length > 5 && (
-                                <span className="inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800">
-                                  +{s.flatLessons.length - 5}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Action */}
-                        <td className="px-5 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setSelected(s)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 dark:border-emerald-500 bg-transparent px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
-                          >
-                            ዝርዝር እይ
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </button>
-                        </td>
+            <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+              {dataLoading ? (
+                <ContactTableSkeleton />
+              ) : filtered.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-14 gap-3">
+                  <GraduationCap className="h-10 w-10 text-slate-300 dark:text-slate-600" />
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    ምንም የትምህርት ሂደት አልተገኘም።
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1020px]">
+                    <thead className="bg-slate-50 dark:bg-slate-800/60 text-left">
+                      <tr className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        <th className="px-5 py-3 font-semibold">ተማሪ</th>
+                        <th className="px-5 py-3 font-semibold">
+                          አሁን ያሉበት ኪታብ እና ደርስ
+                        </th>
+                        <th className="px-5 py-3 font-semibold">
+                          የትምህርት ሂደት %
+                        </th>
+                        <th className="px-5 py-3 font-semibold">
+                          የፈተና ውጤቶች
+                        </th>
+                        <th className="px-5 py-3 font-semibold text-right">
+                          እርምጃ
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
+                    </thead>
+                    <tbody>
+                      {filtered.map((s) => (
+                        <tr
+                          key={`monitor-${s.id}`}
+                          className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                        >
+                          {/* Student */}
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
+                                {s.fullName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold truncate max-w-[200px]">
+                                  {s.fullName}
+                                </p>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  {s.attemptsCount > 0
+                                    ? `${s.attemptsCount} ሙከራ`
+                                    : 'ምንም ፈተና አልተወሰደም'}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Current kitab + lesson */}
+                          <td className="px-5 py-4">
+                            {s.currentCourseName ? (
+                              <div className="flex flex-col">
+                                <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white">
+                                  <BookOpen className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                                  {s.currentCourseName}
+                                </span>
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  ደርስ {s.currentLessonNumber ?? 0}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-400 dark:text-slate-500">
+                                አልጀመሩም
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Progress % */}
+                          <td className="px-5 py-4">
+                            <div className="flex flex-col gap-1.5 min-w-[130px]">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-sm font-bold tabular-nums text-slate-900 dark:text-white">
+                                  {s.progressPercent}%
+                                </span>
+                                <span className="text-[10px] text-slate-500 dark:text-slate-400 tabular-nums">
+                                  {s.passedCount}/{s.totalCourses}
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
+                                  style={{ width: `${s.progressPercent}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Quiz score chips */}
+                          <td className="px-5 py-4">
+                            {s.flatLessons.length === 0 ? (
+                              <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                                —
+                              </span>
+                            ) : (
+                              <div className="flex flex-wrap gap-1.5 max-w-[280px]">
+                                {s.flatLessons.slice(-5).map((l, idx) => (
+                                  <span
+                                    key={idx}
+                                    className={[
+                                      'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums border',
+                                      l.passed
+                                        ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/60'
+                                        : 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/60',
+                                    ].join(' ')}
+                                    title={
+                                      l.date
+                                        ? formatDateAmh(l.date)
+                                        : undefined
+                                    }
+                                  >
+                                    {l.score}/{l.total}
+                                  </span>
+                                ))}
+                                {s.flatLessons.length > 5 && (
+                                  <span className="inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800">
+                                    +{s.flatLessons.length - 5}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Action */}
+                          <td className="px-5 py-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setSelected(s)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 dark:border-emerald-500 bg-transparent px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+                            >
+                              ዝርዝር እይ
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         <p className="mt-5 text-center text-xs text-slate-400 dark:text-slate-500">
           {filtered.length} ከ {students.length} ተማሪዎች ይታያሉ
