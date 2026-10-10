@@ -436,14 +436,14 @@ export default function RegisterPage() {
           <div className="text-center mb-5 sm:mb-6">
             <Image
               src="/logo.png"
-              alt="Basira Logo"
+              alt="Istibsar Logo"
               width={56}
               height={56}
               className="rounded-2xl mx-auto mb-3 shadow-lg object-contain"
             />
             <h1 className="text-2xl font-extrabold text-white">
-              ባሲራ{' '}
-              <span className="font-light text-emerald-300/80">(Basira)</span>
+              እስቲብሳር{' '}
+              <span className="font-light text-emerald-300/80">(Istibsar)</span>
             </h1>
             <p className="mt-1 text-[11px] sm:text-xs text-emerald-200/70 leading-relaxed">
               ፕሪሚየም አካደሚ • የቁርኣን ማዕከል • ዲጂታል ቤተ-መጽሐፍት
@@ -767,7 +767,7 @@ export default function RegisterPage() {
         </div>
 
         <p className="mt-4 text-center text-[11px] text-slate-600">
-          © {new Date().getFullYear()} ባሲራ · Basira
+          © {new Date().getFullYear()} እስቲብሳር · Istibsar
         </p>
       </div>
     </div>

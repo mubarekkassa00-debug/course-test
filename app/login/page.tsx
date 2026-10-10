@@ -225,15 +225,15 @@ export default function LoginPage() {
           <div className="text-center mb-8">
             <Image
               src="/logo.png"
-              alt="Basira Logo"
+              alt="Istibsar Logo"
               width={56}
               height={56}
               className="rounded-2xl mx-auto mb-3 shadow-lg object-contain"
             />
             <h1 className="text-2xl font-extrabold text-white">
-              ባሲራ{' '}
+              እስቲብሳር{' '}
               <span className="font-light text-emerald-300/80">
-                (Basira)
+                (Istibsar)
               </span>
             </h1>
             <p className="mt-2 text-xs sm:text-sm text-emerald-200/70 leading-relaxed">
@@ -415,7 +415,7 @@ export default function LoginPage() {
         </div>
 
         <p className="mt-6 text-center text-[11px] text-slate-600">
-          © {new Date().getFullYear()} ባሲራ · Basira
+          © {new Date().getFullYear()} እስቲብሳር · Istibsar
         </p>
       </div>
     </div>
