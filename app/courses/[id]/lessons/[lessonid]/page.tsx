@@ -35,6 +35,7 @@ import {
   AlertCircle,
   Lock,
   CreditCard,
+  Unlock,
 } from 'lucide-react';
 
 interface Lesson {
@@ -1168,6 +1169,30 @@ export default function LessonPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // ------------------------------------------------------------------
+  // ADMIN UNLOCK OVERRIDE STATE
+  //
+  // When the admin grants manual access via the `unlocked_lessons`
+  // table (see `app/admins/students/page.tsx`), the current lesson (or
+  // the final exam, via the sentinel id `999`) must bypass every
+  // gating rule — the payment gate, the drip-lock, and any other
+  // prerequisite — so the student can immediately view the lesson
+  // content and take the quiz.
+  //
+  //   unlockedLessonIds → Set of every `lesson_id` value the admin has
+  //                       unlocked for this user + course. We store
+  //                       BOTH the raw value AND its trailing numeric
+  //                       form so we match regardless of whether the
+  //                       admin wrote a UUID, a slug ("lesson-3"), or
+  //                       a plain number ("3").
+  //
+  //   unlocksLoading    → true while the fetch is in flight.
+  // ------------------------------------------------------------------
+  const [unlockedLessonIds, setUnlockedLessonIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [unlocksLoading, setUnlocksLoading] = useState(true);
+
+  // ------------------------------------------------------------------
   // RETAKE LOCK
   // ------------------------------------------------------------------
   const realHasPassedBefore =
@@ -1198,6 +1223,153 @@ export default function LessonPage() {
     setSelectedAnswers({});
     setCurrentStep(0);
   }, [lesson]);
+
+  // ------------------------------------------------------------------
+  // ADMIN UNLOCK FETCH (non-fatal)
+  //
+  // Queries the `unlocked_lessons` table for the current user + course
+  // and stores every returned `lesson_id` in a Set (raw + numeric).
+  // Failures (missing table, RLS denial, network) are non-fatal — the
+  // page simply falls back to the normal gating rules.
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!hasMounted) return;
+    let cancelled = false;
+
+    const fetchUnlockedLessons = async () => {
+      setUnlocksLoading(true);
+      try {
+        const canonicalSlug = getCanonicalCourseSlug(courseId);
+        if (!canonicalSlug) {
+          if (!cancelled) {
+            setUnlockedLessonIds(new Set());
+            setUnlocksLoading(false);
+          }
+          return;
+        }
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setUnlockedLessonIds(new Set());
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('unlocked_lessons')
+          .select('lesson_id')
+          .eq('user_id', user.id)
+          .eq('course_id', canonicalSlug);
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn(
+            '[LessonPage] unlocked_lessons fetch warning (non-fatal):',
+            error.message
+          );
+          setUnlockedLessonIds(new Set());
+          return;
+        }
+
+        const ids = new Set<string>();
+
+        for (const row of data ?? []) {
+          const raw = String((row as any)?.lesson_id ?? '').trim();
+          if (!raw) continue;
+
+          // Store the raw value as-is so slug ('lesson-3'), numeric
+          // ('3'), and UUID forms are all covered.
+          ids.add(raw);
+
+          // Also store the trailing numeric form.
+          const numericMatch = raw.match(/(\d+)$/);
+          if (numericMatch) {
+            const n = parseInt(numericMatch[1], 10);
+            if (Number.isFinite(n) && n > 0) {
+              ids.add(String(n));
+            }
+          }
+        }
+
+        console.log(
+          '[LessonPage] Admin-unlocked lesson ids for this course:',
+          Array.from(ids)
+        );
+
+        setUnlockedLessonIds(ids);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn(
+            '[LessonPage] unlocked_lessons fetch unexpected error (non-fatal):',
+            err
+          );
+          setUnlockedLessonIds(new Set());
+        }
+      } finally {
+        if (!cancelled) setUnlocksLoading(false);
+      }
+    };
+
+    fetchUnlockedLessons();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMounted, courseId]);
+
+  // ------------------------------------------------------------------
+  // ADMIN UNLOCK CHECK — resolves whether the CURRENT lesson (or the
+  // final exam) has been manually unlocked by an admin.
+  // ------------------------------------------------------------------
+  const isCurrentLessonAdminUnlocked: boolean = (() => {
+    if (unlockedLessonIds.size === 0) return false;
+    if (!lesson) return false;
+
+    // 1. Final exam — check the sentinel id (999).
+    if (isFinalExam) {
+      if (unlockedLessonIds.has(String(FINAL_EXAM_LESSON_ID))) return true;
+      // Also check the string "final" in case the admin wrote the slug.
+      if (unlockedLessonIds.has('final')) return true;
+    }
+
+    // 2. Raw lesson.id (e.g., "arbaeen-lesson-1").
+    if (unlockedLessonIds.has(lesson.id)) return true;
+    if (unlockedLessonIds.has(lesson.id.toLowerCase())) return true;
+
+    // 3. The URL slug (e.g., "lesson-1", "1").
+    if (currentLessonId && unlockedLessonIds.has(currentLessonId)) {
+      return true;
+    }
+
+    // 4. Numeric forms of the lesson id.
+    if (
+      lesson.lessonNumber !== undefined &&
+      lesson.lessonNumber !== null
+    ) {
+      const fullNum = String(lesson.lessonNumber);
+      if (unlockedLessonIds.has(fullNum)) return true;
+
+      const localNum = getLocalLessonNumber(lesson.lessonNumber);
+      if (localNum !== null && unlockedLessonIds.has(String(localNum))) {
+        return true;
+      }
+    }
+
+    // 5. Numeric extracted from the URL slug.
+    if (slugLessonNumber !== null) {
+      if (unlockedLessonIds.has(String(slugLessonNumber))) return true;
+    }
+
+    // 6. Defensive: "lesson-N" → "N".
+    const stripped = lesson.id.match(/lesson-(\d+)$/i);
+    if (stripped && unlockedLessonIds.has(stripped[1])) return true;
+
+    return false;
+  })();
 
   // ------------------------------------------------------------------
   // PAYMENT STATUS FETCH (for the free-trial gate)
@@ -1272,18 +1444,30 @@ export default function LessonPage() {
     isPaymentWindowLesson &&
     (paymentLoading || !isPaid);
 
-  const requiresPayment = UNLOCK_ALL_LESSONS
+  // ------------------------------------------------------------------
+  // ADMIN OVERRIDE: if the admin has manually unlocked this lesson,
+  // bypass the payment gate entirely.
+  // ------------------------------------------------------------------
+  const requiresPayment = UNLOCK_ALL_LESSONS || isCurrentLessonAdminUnlocked
     ? false
     : realRequiresPayment;
 
   // Auto-open the payment modal once the payment check has resolved.
+  //
+  // We also wait for `unlocksLoading` to be false so we never briefly
+  // flash the payment modal on a lesson that will ultimately be
+  // admin-unlocked.
   useEffect(() => {
-    if (requiresPayment && !paymentLoading) {
+    if (
+      requiresPayment &&
+      !paymentLoading &&
+      !unlocksLoading
+    ) {
       setShowPaymentModal(true);
     } else {
       setShowPaymentModal(false);
     }
-  }, [requiresPayment, paymentLoading]);
+  }, [requiresPayment, paymentLoading, unlocksLoading]);
 
   // ------------------------------------------------------------------
   // Fetch previously saved score from `quiz_results` on lesson change.
@@ -1817,6 +2001,19 @@ export default function LessonPage() {
             )}
 
           <div className="flex-shrink-0 p-3 bg-slate-900 border-t border-slate-800">
+            {/* Admin unlock badge — informational only */}
+            {isCurrentLessonAdminUnlocked && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-indigo-700/70 bg-indigo-950/40 px-3 py-2 text-indigo-200 text-xs">
+                <Unlock className="mt-0.5 h-4 w-4 shrink-0 text-indigo-400" />
+                <div>
+                  <p className="font-semibold">በአስተዳዳሪ ተከፍቷል</p>
+                  <p className="mt-0.5 opacity-90">
+                    ይህ ደርስ በአስተዳዳሪ በእጅ ተከፍቷል — ወዲያውኑ መጀመር ይችላሉ።
+                  </p>
+                </div>
+              </div>
+            )}
+
             {requiresPayment ? (
               <div className="rounded-xl border border-amber-700/70 bg-amber-950/40 p-4 text-center">
                 <div className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-amber-900/60">

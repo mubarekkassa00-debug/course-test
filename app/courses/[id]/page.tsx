@@ -1,7 +1,7 @@
 // app/courses/[id]/page.tsx
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
@@ -91,6 +91,12 @@ const amh = {
   badgeLoading: '⏳ በመጫን ላይ',
   /** Reason line shown while the lock state is still being resolved. */
   loadingLockReason: 'በመጫን ላይ ነው...',
+
+  /** Badge shown on lessons manually unlocked by an admin. */
+  badgeAdminUnlocked: '🔓 በአስተዳዳሪ ተከፍቷል',
+  /** Reason line shown under an admin-unlocked lesson. */
+  adminUnlockReason:
+    'ይህ ደርስ በአስተዳዳሪ በእጅ ተከፍቷል — ወዲያውኑ መጀመር ይችላሉ።',
 };
 
 // ---------------------------------------------------------------------------
@@ -188,6 +194,9 @@ function isSameCalendarDay(a: Date, b: Date): boolean {
  * Sentinel `lesson_id` used to store the final-exam result in the
  * `quiz_results` table. The dedicated final-exam page writes to this
  * row, and we read it here to render the score badge on the exam card.
+ *
+ * The admin override tools may also write this sentinel value into the
+ * `unlocked_lessons` table to grant the final exam directly.
  */
 const FINAL_EXAM_LESSON_ID = 999;
 
@@ -663,6 +672,31 @@ export default function CoursePage() {
   const [scoresError, setScoresError] = useState<string | null>(null);
 
   // -------------------------------------------------------------------------
+  // ADMIN UNLOCKS — `unlocked_lessons` TABLE
+  //
+  // The admin override tools write manual unlocks into a dedicated table
+  // so students can bypass the daily drip-lock and/or the payment gate
+  // for specific lessons without faking quiz scores. We fetch those
+  // unlocks here so the UI can honour them.
+  //
+  //   unlockedLessonIds → a Set of every `lesson_id` value the admin
+  //                       has unlocked for this user + course. We store
+  //                       BOTH the raw value AND its trailing numeric
+  //                       form so we match regardless of whether the
+  //                       admin wrote a UUID, a slug ("lesson-3"), or
+  //                       a plain number ("3").
+  //
+  //   unlocksLoading    → true while the fetch is in flight. During
+  //                       loading we keep the pessimistic lock default
+  //                       so no lesson flashes as unlocked before the
+  //                       real unlock data resolves.
+  // -------------------------------------------------------------------------
+  const [unlockedLessonIds, setUnlockedLessonIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [unlocksLoading, setUnlocksLoading] = useState(true);
+
+  // -------------------------------------------------------------------------
   // PAYMENT STATUS (for the free-trial vs. paid badge logic)
   //
   //   isPaid         → true only when the latest `payments` row for this
@@ -733,6 +767,106 @@ export default function CoursePage() {
       cancelled = true;
     };
   }, [hasMounted]);
+
+  // -------------------------------------------------------------------------
+  // FETCH ADMIN UNLOCKS
+  //
+  // Queries the `unlocked_lessons` table for the current user + course.
+  // The table is expected to have at least: `user_id`, `course_id`,
+  // `lesson_id`. The query is wrapped in try/catch so a missing table or
+  // permission issue never breaks the whole page — the student simply
+  // falls back to the regular drip-lock + payment-gate behavior.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!hasMounted) return;
+    let cancelled = false;
+
+    const fetchUnlockedLessons = async () => {
+      setUnlocksLoading(true);
+      try {
+        const canonicalSlug = getCanonicalCourseSlug(rawCourseId);
+        if (!canonicalSlug) {
+          if (!cancelled) {
+            setUnlockedLessonIds(new Set());
+            setUnlocksLoading(false);
+          }
+          return;
+        }
+
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setUnlockedLessonIds(new Set());
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('unlocked_lessons')
+          .select('lesson_id')
+          .eq('user_id', user.id)
+          .eq('course_id', canonicalSlug);
+
+        if (cancelled) return;
+
+        if (error) {
+          // Non-fatal — the table may not exist in every deployment.
+          console.warn(
+            '[CoursePage] unlocked_lessons fetch warning (non-fatal):',
+            error.message
+          );
+          setUnlockedLessonIds(new Set());
+          return;
+        }
+
+        const ids = new Set<string>();
+
+        for (const row of data ?? []) {
+          const raw = String((row as any)?.lesson_id ?? '').trim();
+          if (!raw) continue;
+
+          // Store the raw value as-is so both slug ('lesson-3') and
+          // numeric ('3') and UUID forms are covered.
+          ids.add(raw);
+
+          // Also extract the trailing numeric form so a match is found
+          // regardless of which shape the admin wrote.
+          const numericMatch = raw.match(/(\d+)$/);
+          if (numericMatch) {
+            const n = parseInt(numericMatch[1], 10);
+            if (Number.isFinite(n) && n > 0) {
+              ids.add(String(n));
+            }
+          }
+        }
+
+        console.log(
+          '[CoursePage] Admin-unlocked lesson ids for this course:',
+          Array.from(ids)
+        );
+
+        setUnlockedLessonIds(ids);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn(
+            '[CoursePage] unlocked_lessons fetch unexpected error (non-fatal):',
+            err
+          );
+          setUnlockedLessonIds(new Set());
+        }
+      } finally {
+        if (!cancelled) setUnlocksLoading(false);
+      }
+    };
+
+    fetchUnlockedLessons();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMounted, rawCourseId]);
 
   useEffect(() => {
     if (!hasMounted) return;
@@ -874,34 +1008,72 @@ export default function CoursePage() {
   }, [course]);
 
   // -------------------------------------------------------------------------
+  // ADMIN-UNLOCK CHECK
+  //
+  // Returns true when the given lesson has been manually unlocked by an
+  // admin via the `unlocked_lessons` table. We test every plausible form
+  // of the lesson identifier so the check matches regardless of whether
+  // the admin wrote a UUID, a slug ("lesson-3"), or a plain number.
+  // -------------------------------------------------------------------------
+  const isLessonAdminUnlocked = useCallback(
+    (lessonId: string): boolean => {
+      if (unlockedLessonIds.size === 0) return false;
+
+      // 1. Raw slug match — e.g. "lesson-3".
+      if (unlockedLessonIds.has(lessonId)) return true;
+
+      // 2. Numeric match — e.g. lesson-3 → "3".
+      const num = lessonIdToNumber(lessonId);
+      if (num !== null && unlockedLessonIds.has(String(num))) return true;
+
+      // 3. Stripped "lesson-N" numeric match — defensive duplication.
+      const stripped = lessonId.match(/lesson-(\d+)$/i);
+      if (stripped && unlockedLessonIds.has(stripped[1])) return true;
+
+      return false;
+    },
+    [unlockedLessonIds]
+  );
+
+  // -------------------------------------------------------------------------
   // DRIP-LOCK RESOLVER (DAILY LESSONS)
   //
   // Given a lesson's 0-based index within `course.lessons`, returns whether
   // it is locked and, if so, the reason:
   //
   //   • UNLOCK_ALL_LESSONS === true    → always UNLOCKED (testing bypass)
+  //   • Lesson admin-unlocked          → always UNLOCKED (override)
   //   • index === 0                    → always UNLOCKED
-  //   • scores still loading           → LOCKED ('loading', pessimistic)
+  //   • scores/unlocks still loading   → LOCKED ('loading', pessimistic)
   //   • previous lesson not yet passed → LOCKED ("complete previous lesson")
   //   • previous lesson passed TODAY   → LOCKED ("come back tomorrow")
   //   • previous lesson passed earlier → UNLOCKED
   //
   // IMPORTANT — PESSIMISTIC LOADING DEFAULT:
-  //   While `scoresLoading` is true, every lesson beyond the first is
-  //   treated as LOCKED. This guarantees that a lesson which the server
-  //   will ultimately mark as locked does not first flash as unlocked on
-  //   the very first render paint. Lesson 1 (index 0) is always unlocked
-  //   by design, so it stays unlocked even during loading.
+  //   While `scoresLoading` OR `unlocksLoading` is true, every lesson
+  //   beyond the first is treated as LOCKED. This guarantees that a
+  //   lesson which the server will ultimately mark as locked does not
+  //   first flash as unlocked on the very first render paint. Lesson 1
+  //   (index 0) is always unlocked by design, so it stays unlocked even
+  //   during loading.
   // -------------------------------------------------------------------------
   const resolveLock = (
     index: number
   ): { locked: boolean; reason: 'previous' | 'tomorrow' | 'loading' | null } => {
     // -----------------------------------------------------------------
     // TESTING BYPASS — when UNLOCK_ALL_LESSONS is true, no lesson is
-    // ever drip-locked. Restore production behavior by setting the flag
-    // to `false` at the top of the component.
+    // ever drip-locked.
     // -----------------------------------------------------------------
     if (UNLOCK_ALL_LESSONS) return { locked: false, reason: null };
+
+    // -----------------------------------------------------------------
+    // ADMIN OVERRIDE — if this lesson was manually unlocked by an admin
+    // via the `unlocked_lessons` table, bypass every drip-lock rule.
+    // -----------------------------------------------------------------
+    const currentLesson = course.lessons[index];
+    if (currentLesson && isLessonAdminUnlocked(currentLesson.id)) {
+      return { locked: false, reason: null };
+    }
 
     // Lesson 1 (index 0) is always unlocked regardless of data.
     if (index <= 0) return { locked: false, reason: null };
@@ -909,9 +1081,12 @@ export default function CoursePage() {
     // -----------------------------------------------------------------
     // PESSIMISTIC LOADING DEFAULT — prevents the "unlocked → locked"
     // flash by holding every not-yet-verified lesson in a locked state
-    // until the real `quiz_results` data resolves.
+    // until BOTH the real `quiz_results` data AND the admin unlock data
+    // have resolved.
     // -----------------------------------------------------------------
-    if (scoresLoading) return { locked: true, reason: 'loading' };
+    if (scoresLoading || unlocksLoading) {
+      return { locked: true, reason: 'loading' };
+    }
 
     const prevLesson = course.lessons[index - 1];
     if (!prevLesson) return { locked: false, reason: null };
@@ -940,19 +1115,15 @@ export default function CoursePage() {
   //
   // Precedence of checks:
   //   1. UNLOCK_ALL_LESSONS === true  → UNLOCKED (testing bypass)
-  //   2. scores still loading         → LOCKED ('loading', pessimistic)
-  //   3. Every regular lesson must have a passing record. If even one is
+  //   2. Admin-unlocked (999)         → UNLOCKED (override)
+  //   3. scores/unlocks still loading → LOCKED ('loading', pessimistic)
+  //   4. Every regular lesson must have a passing record. If even one is
   //      missing (never passed), the final exam is LOCKED with reason
   //      'allLessons' → "እባክዎን አስቀድመው ሁሉንም ደርሶች ያጠናቅቁ".
-  //   4. If all lessons are passed, check the LAST lesson's earliest pass
+  //   5. If all lessons are passed, check the LAST lesson's earliest pass
   //      date:
   //        • passed TODAY (same calendar day) → LOCKED, reason 'tomorrow'
-  //          → "ነገ ይከፈታል (በቀን አንድ ደርስ/ፈተና ብቻ)"
   //        • passed on an earlier day        → UNLOCKED
-  //
-  // IMPORTANT — PESSIMISTIC LOADING DEFAULT:
-  //   While `scoresLoading` is true we return LOCKED ('loading') so the
-  //   final exam card cannot flash as unlocked before the data resolves.
   // -------------------------------------------------------------------------
   const resolveFinalExamLock = (): {
     locked: boolean;
@@ -960,16 +1131,27 @@ export default function CoursePage() {
   } => {
     // -----------------------------------------------------------------
     // TESTING BYPASS — when UNLOCK_ALL_LESSONS is true, the final exam
-    // is never locked. Restore production behavior by setting the flag
-    // to `false` at the top of the component.
+    // is never locked.
     // -----------------------------------------------------------------
     if (UNLOCK_ALL_LESSONS) return { locked: false, reason: null };
 
     // -----------------------------------------------------------------
-    // PESSIMISTIC LOADING DEFAULT — hold the exam locked until the
-    // real `quiz_results` data resolves so it never flashes unlocked.
+    // ADMIN OVERRIDE — the admin can grant the final exam directly by
+    // writing the sentinel `FINAL_EXAM_LESSON_ID` (999) into the
+    // `unlocked_lessons` table.
     // -----------------------------------------------------------------
-    if (scoresLoading) return { locked: true, reason: 'loading' };
+    if (unlockedLessonIds.has(String(FINAL_EXAM_LESSON_ID))) {
+      return { locked: false, reason: null };
+    }
+
+    // -----------------------------------------------------------------
+    // PESSIMISTIC LOADING DEFAULT — hold the exam locked until the
+    // real `quiz_results` data AND the admin unlock data resolve so it
+    // never flashes unlocked.
+    // -----------------------------------------------------------------
+    if (scoresLoading || unlocksLoading) {
+      return { locked: true, reason: 'loading' };
+    }
 
     const lessons = course.lessons;
     if (!lessons || lessons.length === 0) {
@@ -1108,7 +1290,7 @@ export default function CoursePage() {
                   <Award className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <span className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  ባሲራ
+                  እስቲብሳር
                 </span>
               </div>
               <button
@@ -1173,17 +1355,26 @@ export default function CoursePage() {
               const passed = score ? isPassed(score) : false;
 
               // ---------------------------------------------------------
+              // ADMIN UNLOCK OVERRIDE — true when the admin has manually
+              // unlocked this specific lesson via `unlocked_lessons`.
+              // ---------------------------------------------------------
+              const adminUnlocked = isLessonAdminUnlocked(lesson.id);
+
+              // ---------------------------------------------------------
               // DRIP-LOCK — decide whether this lesson is available.
               // `idx` matches the lesson's 0-based index within
               // `course.lessons` because lessons are pushed first, in
               // order, into `timelineItems`.
               //
               // When UNLOCK_ALL_LESSONS is true, `resolveLock` always
-              // returns `{ locked: false }`, so `dripLocked` is false.
+              // returns `{ locked: false }`.
               //
-              // During `scoresLoading`, `resolveLock` returns a
-              // pessimistic `{ locked: true, reason: 'loading' }` for
-              // every lesson beyond the first, preventing the
+              // When this lesson was admin-unlocked, `resolveLock`
+              // already returns `{ locked: false }`.
+              //
+              // During `scoresLoading` OR `unlocksLoading`, `resolveLock`
+              // returns a pessimistic `{ locked: true, reason: 'loading' }`
+              // for every lesson beyond the first, preventing the
               // "unlocked → locked" flash.
               // ---------------------------------------------------------
               const lock = resolveLock(idx);
@@ -1198,18 +1389,20 @@ export default function CoursePage() {
               //   Lessons 1–3  → part of the 3-day free trial.
               //   Lessons 4+   → require an approved payment.
               //
+              // ADMIN OVERRIDE:
+              //   If the lesson was manually unlocked by an admin, the
+              //   payment gate is bypassed entirely — the admin has
+              //   explicitly chosen to grant access to this student.
+              //
               // PESSIMISTIC LOADING DEFAULT:
               //   While `paymentLoading` is true we treat the user as
               //   "possibly unpaid", so lessons 4+ are shown as
               //   payment-locked during loading. Once the payment check
-              //   resolves:
-              //     • paid   → the lesson unlocks (softer unlock-flash)
-              //     • unpaid → the lesson stays locked (no flash)
-              //   This prevents a lesson that will ultimately be
-              //   payment-locked from first flashing as unlocked.
+              //   resolves, the correct state renders.
               // ---------------------------------------------------------
               const requiresPayment =
                 !UNLOCK_ALL_LESSONS &&
+                !adminUnlocked &&
                 lessonNumber > FREE_TRIAL_LESSON_COUNT &&
                 (paymentLoading || !isPaid);
 
@@ -1221,27 +1414,28 @@ export default function CoursePage() {
               // ---------------------------------------------------------
               // STATUS BADGE — small inline pill next to the title.
               //
-              //   0. While loading                  → "⏳ በመጫን ላይ"
-              //   1. Lessons 1–3 unlocked           → "▶️ ነፃ ደርስ"
-              //   2. Any future-day (locked) lesson → "⏳ ነገ ይከፈታል"
+              //   0. Admin-unlocked                 → "🔓 በአስተዳዳሪ ተከፍቷል"
+              //   1. While loading                  → "⏳ በመጫን ላይ"
+              //   2. Future-day (locked) lesson     → "⏳ ነገ ይከፈታል"
               //   3. Lessons 4+ unpaid + arrived    → "🔒 ክፍያ ይፈልጋል"
-              //   4. Paid + unlocked lesson         → "▶️ አጫውት"
-              //
-              // When UNLOCK_ALL_LESSONS is true, dripLocked and
-              // paymentLocked are both false, so the badge falls through
-              // to the free-trial / paid labels as appropriate.
+              //   4. Lessons 1–3 unlocked           → "▶️ ነፃ ደርስ"
+              //   5. Paid + unlocked lesson         → "▶️ አጫውት"
               // ---------------------------------------------------------
               let badge: { label: string; className: string } | null = null;
 
-              if (dripLocked && lock.reason === 'loading') {
-                // Pessimistic loading badge — neutral, non-committal.
+              if (adminUnlocked) {
+                badge = {
+                  label: amh.badgeAdminUnlocked,
+                  className:
+                    'bg-indigo-100 text-indigo-700 border-indigo-200/80 dark:bg-indigo-500/20 dark:text-indigo-300 dark:border-indigo-500/30',
+                };
+              } else if (dripLocked && lock.reason === 'loading') {
                 badge = {
                   label: amh.badgeLoading,
                   className:
                     'bg-slate-100 text-slate-600 border-slate-200/80 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700/60',
                 };
               } else if (dripLocked) {
-                // Future day → unlocks tomorrow.
                 badge = {
                   label: amh.badgeUnlocksTomorrow,
                   className:
@@ -1259,9 +1453,7 @@ export default function CoursePage() {
                   className:
                     'bg-emerald-100 text-emerald-700 border-emerald-200/80 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30',
                 };
-              } else if (isPaid || UNLOCK_ALL_LESSONS) {
-                // When UNLOCK_ALL_LESSONS is true, treat every unlocked
-                // lesson beyond the trial window as playable.
+              } else if (isPaid || UNLOCK_ALL_LESSONS || adminUnlocked) {
                 badge = {
                   label: amh.badgePlay,
                   className:
@@ -1289,6 +1481,8 @@ export default function CoursePage() {
                       ? 'bg-slate-50 dark:bg-slate-900/60 border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40'
                       : completed
                       ? 'bg-emerald-50/60 border-emerald-200/80 shadow-sm dark:bg-emerald-500/[0.06] dark:border-emerald-500/20 dark:shadow-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'
+                      : adminUnlocked
+                      ? 'bg-indigo-50/60 border-indigo-200/80 shadow-sm dark:bg-indigo-500/[0.06] dark:border-indigo-500/20 dark:shadow-indigo-950/20 hover:bg-indigo-50 dark:hover:bg-indigo-500/10'
                       : 'bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40 hover:bg-slate-100/80 dark:hover:bg-slate-800/90',
                   ].join(' ')}
                 >
@@ -1315,7 +1509,7 @@ export default function CoursePage() {
                         {lesson.title}
                       </p>
 
-                      {/* Status badge (loading / free trial / tomorrow / payment) */}
+                      {/* Status badge (admin / loading / free / tomorrow / payment) */}
                       {badge && (
                         <span
                           className={[
@@ -1362,6 +1556,14 @@ export default function CoursePage() {
                       <p className="mt-1 text-[11px] sm:text-xs font-medium text-amber-600 dark:text-amber-400 flex items-start gap-1.5 leading-snug">
                         <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
                         <span>{amh.paymentLockReason}</span>
+                      </p>
+                    )}
+
+                    {/* Admin-unlock reason line — informational only */}
+                    {adminUnlocked && !isLocked && (
+                      <p className="mt-1 text-[11px] sm:text-xs font-medium text-indigo-600 dark:text-indigo-400 flex items-start gap-1.5 leading-snug">
+                        <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                        <span>{amh.adminUnlockReason}</span>
                       </p>
                     )}
                   </div>
@@ -1411,14 +1613,19 @@ export default function CoursePage() {
             // and slicing to MAX_FINAL_EXAM_QUESTIONS.
             //
             // DRIP-LOCK (final exam):
-            //   • UNLOCK_ALL_LESSONS === true → always UNLOCKED
-            //   • scores still loading        → LOCKED ('loading')
+            //   • UNLOCK_ALL_LESSONS === true    → always UNLOCKED
+            //   • Admin-unlocked (999)           → UNLOCKED
+            //   • scores/unlocks still loading   → LOCKED ('loading')
             //   • Not all regular lessons passed → LOCKED ('allLessons')
             //   • All passed but last passed today → LOCKED ('tomorrow')
             //   • All passed and last passed earlier → UNLOCKED
             // ---------------------------------------------------------
             const finalLock = resolveFinalExamLock();
             const isFinalLocked = finalLock.locked;
+
+            const finalAdminUnlocked = unlockedLessonIds.has(
+              String(FINAL_EXAM_LESSON_ID)
+            );
 
             const finalCompleted = !!finalScore;
             const finalPassed = finalScore ? isPassed(finalScore) : false;
@@ -1434,6 +1641,8 @@ export default function CoursePage() {
                     ? 'bg-slate-50 dark:bg-slate-900/60 border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40'
                     : finalCompleted
                     ? 'bg-emerald-50/60 border-emerald-200/80 shadow-sm dark:bg-emerald-500/[0.06] dark:border-emerald-500/20 dark:shadow-emerald-950/20 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'
+                    : finalAdminUnlocked
+                    ? 'bg-indigo-50/60 border-indigo-200/80 shadow-sm dark:bg-indigo-500/[0.06] dark:border-indigo-500/20 dark:shadow-indigo-950/20 hover:bg-indigo-50 dark:hover:bg-indigo-500/10'
                     : 'bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800/80 shadow-sm dark:shadow-slate-950/40 hover:bg-slate-100/80 dark:hover:bg-slate-800/90',
                 ].join(' ')}
               >
@@ -1459,10 +1668,15 @@ export default function CoursePage() {
                     >
                       {amh.finalExam}
                     </p>
-                    {/* Score badge — matches the lesson badge format:
-                        `ውጤት: correct/total · percent%` with emerald for
-                        pass (≥ 50%) and amber for fail.
-                        Hidden while the exam is locked. */}
+
+                    {/* Admin-unlock badge on the final exam row */}
+                    {finalAdminUnlocked && (
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] sm:text-xs font-bold whitespace-nowrap border bg-indigo-100 text-indigo-700 border-indigo-200/80 dark:bg-indigo-500/20 dark:text-indigo-300 dark:border-indigo-500/30">
+                        {amh.badgeAdminUnlocked}
+                      </span>
+                    )}
+
+                    {/* Score badge — matches the lesson badge format. */}
                     {finalScore && !isFinalLocked && (
                       <span
                         className={[
@@ -1490,6 +1704,14 @@ export default function CoursePage() {
                           ? amh.comeBackTomorrowExam
                           : amh.completeAllLessons}
                       </span>
+                    </p>
+                  )}
+
+                  {/* Admin-unlock reason line — informational only */}
+                  {finalAdminUnlocked && !isFinalLocked && (
+                    <p className="mt-1 text-[11px] sm:text-xs font-medium text-indigo-600 dark:text-indigo-400 flex items-start gap-1.5 leading-snug">
+                      <Lock className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                      <span>{amh.adminUnlockReason}</span>
                     </p>
                   )}
                 </div>
