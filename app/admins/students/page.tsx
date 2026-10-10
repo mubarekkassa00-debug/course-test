@@ -68,8 +68,22 @@ const COURSE_NAME_BY_SLUG = new Map(
 
 const PASS_THRESHOLD_PERCENT = 50;
 
-/** Default total-questions value used when an admin unlocks a lesson. */
-const DEFAULT_UNLOCK_TOTAL_QUESTIONS = 5;
+/**
+ * Order of preference for the dedicated unlock table. The first table
+ * that exists and accepts the insert wins. These tables are expected to
+ * have at least the columns: `user_id`, `course_id`, `lesson_id`.
+ *
+ * IMPORTANT: The unlock operation NEVER writes to `quiz_results`. That
+ * table is reserved for genuine student quiz attempts and must not be
+ * polluted with admin-injected scores.
+ */
+const UNLOCK_TABLE_CANDIDATES = [
+  'unlocked_lessons',
+  'lesson_unlocks',
+  'user_lesson_unlocks',
+  'user_unlocked_lessons',
+  'lesson_progress',
+];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,11 +100,6 @@ interface ProfileRow {
 interface QuizRow {
   user_id: string;
   course_id: string;
-  /**
-   * Primary key of the lesson the attempt belongs to. This column is
-   * declared NOT NULL in the database, so it MUST always be carried
-   * through to any downstream INSERT/UPDATE operations.
-   */
   lesson_id: string | null;
   score: number | null;
   total_questions: number | null;
@@ -99,7 +108,6 @@ interface QuizRow {
 
 interface LessonEntry {
   lessonNumber: number;
-  /** The `lessons.id` value of this attempt — needed for admin overrides. */
   lessonId: string | null;
   score: number;
   total: number;
@@ -132,35 +140,50 @@ interface StudentRow {
   attemptsCount: number;
   currentCourseName: string | null;
   currentLessonNumber: number | null;
-  /** Slug of the student's current kitab — used by the override tools. */
   currentCourseId: string | null;
   breakdown: CourseBreakdown[];
-  /** Latest quiz attempt timestamp — used to compute "active today". */
   lastActivityAt: string | null;
-  /** Flat, chronological list of every lesson attempt (for score chips). */
   flatLessons: LessonEntry[];
 }
 
 type FilterKey = 'all' | 'in_progress' | 'completed';
 
-/**
- * Quick-filter overlays that can be applied by clicking the top stats
- * cards. These are evaluated as an ADDITIONAL constraint on top of the
- * regular name/email/phone search and the filter-tab selection.
- */
 type QuickFilterKey =
   | 'none'
   | 'pending_payments'
   | 'active_today'
   | 'new_this_week';
 
-/**
- * Which of the two mutually-exclusive tables is currently displayed.
- *
- *   'list'    → ጠቅላላ ተማሪዎች (contact & registration overview)
- *   'monitor' → የተማሪዎች መቆጣጠሪያ (progress & score monitor)
- */
 type ActiveView = 'list' | 'monitor';
+
+/** Recipient audiences for the announcement composer. */
+type AnnouncementRecipients = 'all' | 'active' | 'completed';
+
+/** Feedback shape returned by override operations. */
+interface FeedbackMessage {
+  type: 'success' | 'error';
+  text: string;
+}
+
+/**
+ * Props for the AnnouncementModal subcomponent. All fields are required
+ * so any missing prop is caught at compile time.
+ */
+interface AnnouncementModalProps {
+  title: string;
+  message: string;
+  recipients: AnnouncementRecipients;
+  sending: boolean;
+  status: FeedbackMessage | null;
+  totalStudents: number;
+  activeTodayCount: number;
+  completedCount: number;
+  onTitleChange: (value: string) => void;
+  onMessageChange: (value: string) => void;
+  onRecipientsChange: (value: AnnouncementRecipients) => void;
+  onSend: () => void;
+  onClose: () => void;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -299,7 +322,6 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
   return breakdowns;
 }
 
-/** Flatten every lesson across all courses into one chronological list. */
 function buildFlatLessons(breakdown: CourseBreakdown[]): LessonEntry[] {
   const all: LessonEntry[] = [];
   for (const b of breakdown) {
@@ -313,42 +335,10 @@ function buildFlatLessons(breakdown: CourseBreakdown[]): LessonEntry[] {
   return all;
 }
 
-/**
- * Resolve the next valid `lesson_id` for a given course.
- *
- * The `quiz_results.lesson_id` column is NOT NULL, so every admin insert
- * MUST supply a real primary key from the `lessons` table (or an
- * equivalent lesson reference from an alternate source).
- *
- * The resolution walks through MULTIPLE strategies, in order of preference:
- *
- *   STRATEGY 1 — Direct query on `lessons` using every plausible
- *                course-referencing column name:
- *                  course_id, book_id, kitab_id, kitab_slug, slug,
- *                  course_slug
- *                Combined with every plausible ordering column.
- *
- *   STRATEGY 2 — Indirect join through the `kitabs` table:
- *                  kitabs.slug = courseId  →  kitabs.id
- *                  →  lessons.<fk> = kitabs.id
- *
- *   STRATEGY 3 — Per-course quiz tables (e.g. `usul_al_thalatha_quiz`,
- *                `arbain_quiz`, etc.). We scan the first row for any
- *                plausible lesson reference column
- *                (lesson_id, lessonId, lesson, id, kitab_id, slug).
- *
- * If every strategy fails, we return `null` so the caller can show a
- * clear error to the admin rather than sending a NULL `lesson_id` to
- * the DB.
- */
 async function fetchNextLessonIdForCourse(
   courseId: string,
   attemptedLessonIds: Set<string>
 ): Promise<{ lessonId: string | null; reason: string }> {
-  // ------------------------------------------------------------------
-  // STRATEGY 1 — Direct query on `lessons` with every plausible FK
-  //              and ordering column.
-  // ------------------------------------------------------------------
   const idColumns: string[] = [
     'course_id',
     'book_id',
@@ -403,7 +393,6 @@ async function fetchNextLessonIdForCourse(
           rows
         );
 
-        // Prefer the first lesson that has NOT been attempted yet.
         for (const row of rows) {
           const id = String(row?.id ?? '');
           if (id && !attemptedLessonIds.has(id)) {
@@ -415,7 +404,6 @@ async function fetchNextLessonIdForCourse(
           }
         }
 
-        // Every lesson has already been attempted → credit the last one.
         const lastRow = rows[rows.length - 1];
         const lastId = String(lastRow?.id ?? '');
         if (lastId) {
@@ -434,13 +422,6 @@ async function fetchNextLessonIdForCourse(
     }
   }
 
-  // ------------------------------------------------------------------
-  // STRATEGY 2 — Indirect resolution via `kitabs` table.
-  //
-  //   Some schemas store kitabs in their own table and `lessons` only
-  //   carries a `kitab_id` FK. We resolve kitabs.slug → kitabs.id, then
-  //   query `lessons` by that id using every plausible FK column.
-  // ------------------------------------------------------------------
   try {
     const { data: kitabRows, error: kitabErr } = await supabase
       .from('kitabs')
@@ -517,13 +498,6 @@ async function fetchNextLessonIdForCourse(
     console.log('[Strategy 2] kitabs lookup threw (non-fatal):', err);
   }
 
-  // ------------------------------------------------------------------
-  // STRATEGY 3 — Per-course quiz tables.
-  //
-  //   Some schemas store each course's questions in a dedicated table
-  //   (e.g. `usul_al_thalatha_quiz`). We fetch the first row and scan
-  //   it for any plausible lesson reference.
-  // ------------------------------------------------------------------
   const quizTableCandidates = [
     `${courseId}_quiz`,
     `${courseId}_questions`,
@@ -663,9 +637,6 @@ function downloadCSV(rows: StudentRow[]) {
 export default function AdminStudentsPage() {
   const router = useRouter();
 
-  // -------------------------------------------------------------------------
-  // RBAC state
-  // -------------------------------------------------------------------------
   const [authLoading, setAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -678,38 +649,23 @@ export default function AdminStudentsPage() {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [selected, setSelected] = useState<StudentRow | null>(null);
 
-  // -------------------------------------------------------------------------
-  // Active view — only ONE of the two tables renders at a time.
-  // -------------------------------------------------------------------------
   const [activeView, setActiveView] = useState<ActiveView>('list');
 
-  // -------------------------------------------------------------------------
-  // Pending-payments count + the set of user_ids with pending payments.
-  // -------------------------------------------------------------------------
   const [pendingPayments, setPendingPayments] = useState(0);
   const [pendingPaymentUserIds, setPendingPaymentUserIds] = useState<
     Set<string>
   >(new Set());
 
-  // -------------------------------------------------------------------------
-  // Quick-filter overlay
-  // -------------------------------------------------------------------------
   const [quickFilter, setQuickFilter] = useState<QuickFilterKey>('none');
 
-  // -------------------------------------------------------------------------
-  // Announcement composer modal state
-  // -------------------------------------------------------------------------
   const [announceOpen, setAnnounceOpen] = useState(false);
   const [announceTitle, setAnnounceTitle] = useState('');
   const [announceMessage, setAnnounceMessage] = useState('');
-  const [announceRecipients, setAnnounceRecipients] = useState<
-    'all' | 'active' | 'completed'
-  >('all');
+  const [announceRecipients, setAnnounceRecipients] =
+    useState<AnnouncementRecipients>('all');
   const [announceSending, setAnnounceSending] = useState(false);
-  const [announceStatus, setAnnounceStatus] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
+  const [announceStatus, setAnnounceStatus] =
+    useState<FeedbackMessage | null>(null);
 
   // -------------------------------------------------------------------------
   // 1. STRICT RBAC — AUTH + ADMIN GUARD
@@ -781,7 +737,6 @@ export default function AdminStudentsPage() {
     setDataLoading(true);
     setErrorMessage(null);
 
-    // ---- A) PROFILES (required) ----
     let profiles: ProfileRow[] = [];
     try {
       const { data, error } = await supabase.from('profiles').select('*');
@@ -825,7 +780,6 @@ export default function AdminStudentsPage() {
       return;
     }
 
-    // ---- B) QUIZ RESULTS (optional, SILENT on failure) ----
     let quizRows: QuizRow[] = [];
     try {
       const { data, error } = await supabase
@@ -902,9 +856,8 @@ export default function AdminStudentsPage() {
       quizRows = [];
     }
 
-    // ---- B2) PENDING PAYMENTS: count + user_id set (optional, SILENT) ----
     let pendingCount = 0;
-    let pendingIds = new Set<string>();
+    const pendingIds = new Set<string>();
     try {
       const { count, error: payErr } = await supabase
         .from('payments')
@@ -945,7 +898,6 @@ export default function AdminStudentsPage() {
     setPendingPayments(pendingCount);
     setPendingPaymentUserIds(pendingIds);
 
-    // ---- Index quiz rows by user ----
     const quizzesByUser = new Map<string, QuizRow[]>();
     for (const q of quizRows) {
       if (!q.user_id) continue;
@@ -954,7 +906,6 @@ export default function AdminStudentsPage() {
       quizzesByUser.set(q.user_id, arr);
     }
 
-    // ---- Compose student rows ----
     const rows: StudentRow[] = profiles
       .filter((p) => p.role !== 'admin' && p.id)
       .map((p) => {
@@ -2035,10 +1986,7 @@ function StudentModal({
   const [unlockingCourseId, setUnlockingCourseId] = useState<string | null>(
     null
   );
-  const [feedback, setFeedback] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
+  const [feedback, setFeedback] = useState<FeedbackMessage | null>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2278,10 +2226,6 @@ function StudentModal({
           console.error(
             '[AdminOverride] UnlockNextLesson aborted — no valid lesson_id could be resolved.'
           );
-          console.error(
-            'Attempted lesson_ids snapshot:',
-            Array.from(attemptedLessonIds)
-          );
           console.groupEnd();
           setFeedback({
             type: 'error',
@@ -2292,101 +2236,87 @@ function StudentModal({
           return;
         }
 
-        const total = DEFAULT_UNLOCK_TOTAL_QUESTIONS;
-        const passingScore = Math.ceil(
-          (total * PASS_THRESHOLD_PERCENT) / 100
-        );
-        const createdAt = new Date().toISOString();
-
-        const insertPayload = {
+        const unlockedAt = new Date().toISOString();
+        const unlockPayload = {
           user_id: student.id,
           course_id: courseId,
           lesson_id: nextLessonId,
-          score: passingScore,
-          total_questions: total,
-          created_at: createdAt,
+          unlocked_at: unlockedAt,
         };
 
         console.log(
-          '[AdminOverride] Final INSERT payload → quiz_results:',
-          insertPayload
-        );
-        console.log(
-          '[AdminOverride] Payload JSON:',
-          JSON.stringify(insertPayload, null, 2)
+          '[AdminOverride] Unlock payload (→ dedicated unlock table, NOT quiz_results):',
+          unlockPayload
         );
 
-        const missingFields: string[] = [];
-        if (!insertPayload.user_id) missingFields.push('user_id');
-        if (!insertPayload.course_id) missingFields.push('course_id');
-        if (!insertPayload.lesson_id) missingFields.push('lesson_id');
-        if (
-          typeof insertPayload.score !== 'number' ||
-          Number.isNaN(insertPayload.score)
-        ) {
-          missingFields.push('score');
-        }
-        if (
-          typeof insertPayload.total_questions !== 'number' ||
-          Number.isNaN(insertPayload.total_questions)
-        ) {
-          missingFields.push('total_questions');
-        }
+        let lastError = '';
+        for (const tableName of UNLOCK_TABLE_CANDIDATES) {
+          try {
+            const { error } = await supabase
+              .from(tableName)
+              .insert(unlockPayload);
 
-        if (missingFields.length > 0) {
-          const msg = `❌ የሚከተሉት የግዴታ መስኮች ጎድለዋል፡ ${missingFields.join(
-            ', '
-          )}። እባክዎ እንደገና ይሞክሩ።`;
-          console.error('[AdminOverride] Aborting — missing fields:', missingFields);
-          console.groupEnd();
-          setFeedback({ type: 'error', text: msg });
-          return;
-        }
+            if (!error) {
+              console.log(
+                `[AdminOverride] Unlock recorded successfully in "${tableName}".`
+              );
+              console.groupEnd();
 
-        const { data: insertedRows, error } = await supabase
-          .from('quiz_results')
-          .insert(insertPayload)
-          .select();
+              setFeedback({
+                type: 'success',
+                text: `ቀጣዩ ደርስ በተሳካ ሁኔታ ተከፍቷል። (lesson_id: ${nextLessonId})`,
+              });
+              await onRefresh();
+              return;
+            }
 
-        if (error) {
-          console.error(
-            '[AdminOverride] Supabase INSERT failed. Full error object:',
-            error
-          );
-          console.error(
-            '[AdminOverride] Supabase INSERT failed. JSON:',
-            JSON.stringify(error, null, 2)
-          );
-          console.groupEnd();
+            lastError = error.message;
+            console.log(
+              `[AdminOverride] Unlock attempt on "${tableName}" failed:`,
+              error.message
+            );
 
-          const errorText = String(error.message || '');
-          let hint = '';
-          if (errorText.includes('lesson_id')) {
-            hint = ' (lesson_id ላይ ችግር አለ — እባክዎ የ lessons ሰንጠረዥን ያረጋግጡ)';
-          } else if (errorText.includes('user_id')) {
-            hint = ' (user_id ላይ ችግር አለ)';
-          } else if (errorText.includes('course_id')) {
-            hint = ' (course_id ላይ ችግር አለ)';
+            const lower = lastError.toLowerCase();
+            const tableMissing =
+              lower.includes('does not exist') ||
+              lower.includes('relation') ||
+              lower.includes('schema cache') ||
+              lower.includes('could not find the table') ||
+              lower.includes('not find the table');
+
+            if (!tableMissing) {
+              console.error(
+                `[AdminOverride] Unlock on "${tableName}" failed for a NON-schema reason:`,
+                lastError
+              );
+              console.groupEnd();
+              setFeedback({
+                type: 'error',
+                text: `ቀጣዩን ደርስ መክፈት አልተቻለም፡ ${lastError}`,
+              });
+              return;
+            }
+          } catch (innerErr) {
+            lastError = describeError(innerErr);
+            console.log(
+              `[AdminOverride] Unlock attempt on "${tableName}" threw:`,
+              lastError
+            );
           }
-
-          setFeedback({
-            type: 'error',
-            text: `ቀጣዩን ደርስ መክፈት አልተቻለም፡ ${error.message}${hint}`,
-          });
-          return;
         }
 
-        console.log(
-          '[AdminOverride] Supabase INSERT success. Returned rows:',
-          insertedRows
+        console.error(
+          '[AdminOverride] No supported unlock table found. Last error:',
+          lastError
         );
         console.groupEnd();
-
         setFeedback({
-          type: 'success',
-          text: `ቀጣዩ ደርስ በተሳካ ሁኔታ ተከፍቷል። (lesson_id: ${nextLessonId})`,
+          type: 'error',
+          text:
+            '❌ ቀጣዩን ደርስ ለመክፈት የሚያስችል የተዘጋጀ ሠንጠረዥ አልተገኘም። ' +
+            'እባክዎ `unlocked_lessons` የተባለ ሠንጠረዥ (user_id, course_id, lesson_id, unlocked_at) ይፍጠሩ። ' +
+            '(የፈተና ውጤቶች በራሳቸው ብቻ እንዲቀመጡ ለማድረግ ሠንጠረዡ ያስፈልጋል።)',
         });
-        await onRefresh();
       } catch (err) {
         console.error('[AdminOverride] UnlockNextLesson unexpected error:', err);
         console.groupEnd();
@@ -2634,9 +2564,10 @@ function StudentModal({
           <section className="flex items-start gap-2.5 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/70 dark:bg-indigo-950/30 px-3.5 py-2.5 text-xs text-indigo-800 dark:text-indigo-300">
             <Info className="h-4 w-4 shrink-0 mt-0.5" />
             <span>
-              የአስተዳዳሪ ማስተካከያ መሳሪያዎች፡ የተማሪውን የፈተና ነጥብ ማስተካከል፣ የተሳሳተ
-              ሙከራ ማጥፋት እና ቀጣይ ደርስ መክፈት ይችላሉ። ማንኛውም ስህተት ከተከሰተ ዝርዝር
-              መረጃ በ browser console ውስጥ ይታያል።
+              የአስተዳዳሪ ማስተካከያ መሳሪያዎች፡ የተማሪውን የፈተና ነጥብ ማስተካከል፣
+              የተሳሳተ ሙከራ ማጥፋት እና ቀጣይ ደርስ መክፈት ይችላሉ።
+              የፈተና ውጤቶች በራሳቸው ብቻ ተመዝግበው ይቀመጣሉ፤ ማስተካከያው ያለውን ውጤት
+              ብቻ ያስተካክላል።
             </span>
           </section>
 
@@ -2884,6 +2815,11 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 
 // ---------------------------------------------------------------------------
 // Announcement / Notification Composer
+//
+// Fixes applied:
+//   • `AnnouncementModalProps` interface fully typed (no TS7010).
+//   • `recipients` uses the `AnnouncementRecipients` union.
+//   • Component returns `ReactNode` (no `JSX.Element` — avoids TS2503).
 // ---------------------------------------------------------------------------
 function AnnouncementModal({
   title,
@@ -2899,21 +2835,7 @@ function AnnouncementModal({
   onRecipientsChange,
   onSend,
   onClose,
-}: {
-  title: string;
-  message: string;
-  recipients: 'all' | 'active' | 'completed';
-  sending: boolean;
-  status: { type: 'success' | 'error'; text: string } | null;
-  totalStudents: number;
-  activeTodayCount: number;
-  completedCount: number;
-  onTitleChange: (v: string) => void;
-  onMessageChange: (v: string) => void;
-  onRecipientsChange: (v: 'all' | 'active' | 'completed') => void;
-  onSend: () => void;
-  onClose: () => void;
-}) {
+}: AnnouncementModalProps): ReactNode {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !sending) onClose();
@@ -2931,7 +2853,7 @@ function AnnouncementModal({
   }, []);
 
   const audienceOptions: {
-    key: 'all' | 'active' | 'completed';
+    key: AnnouncementRecipients;
     label: string;
     count: number;
   }[] = [
@@ -2955,6 +2877,7 @@ function AnnouncementModal({
       />
 
       <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl">
+        {/* Header */}
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-4">
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-md shadow-emerald-900/20">
@@ -2981,7 +2904,9 @@ function AnnouncementModal({
           </button>
         </div>
 
+        {/* Body */}
         <div className="px-5 sm:px-6 py-5 space-y-5">
+          {/* Recipients */}
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
               ተቀባዮች
@@ -3022,6 +2947,7 @@ function AnnouncementModal({
             </div>
           </div>
 
+          {/* Title */}
           <div>
             <label
               htmlFor="announce-title"
@@ -3040,6 +2966,7 @@ function AnnouncementModal({
             />
           </div>
 
+          {/* Message */}
           <div>
             <label
               htmlFor="announce-message"
@@ -3061,6 +2988,7 @@ function AnnouncementModal({
             </p>
           </div>
 
+          {/* Status banner */}
           {status && (
             <div
               role={status.type === 'error' ? 'alert' : 'status'}
@@ -3081,6 +3009,7 @@ function AnnouncementModal({
           )}
         </div>
 
+        {/* Footer */}
         <div className="sticky bottom-0 border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur px-5 sm:px-6 py-3 flex items-center justify-end gap-2">
           <button
             type="button"
