@@ -1998,18 +1998,6 @@ function StudentModal({
 
   // -------------------------------------------------------------------------
   // DIRECT UNLOCK FORM STATE
-  //
-  // A simple, focused form that lets the admin directly grant access to a
-  // specific lesson (or the final exam) for the current student without
-  // having to guess the lesson id or search through the whole course.
-  //
-  //   directUnlockCourseId → which kitab to unlock (defaults to the first
-  //                          required course).
-  //   directUnlockLessonStr → the lesson number as a raw string (validated
-  //                           as an integer 1-100 on submit).
-  //   directUnlockIsFinal  → when true, unlocks the FINAL EXAM of the
-  //                          selected course (uses the sentinel id 999).
-  //   directUnlockBusy     → in-flight flag for the "Unlock" button.
   // -------------------------------------------------------------------------
   const [directUnlockCourseId, setDirectUnlockCourseId] = useState<string>(
     REQUIRED_COURSES[0]?.slug ?? 'usul_al_thalatha'
@@ -2364,14 +2352,6 @@ function StudentModal({
 
   // -------------------------------------------------------------------------
   // ADMIN DIRECT UNLOCK — kitab + lesson number
-  //
-  // A simplified, explicit alternative to `handleUnlockNextLesson`. The
-  // admin picks the kitab from a dropdown and either:
-  //   • enters a specific lesson number (1–100), OR
-  //   • ticks "Final Quiz" to unlock the final exam of that kitab.
-  //
-  // The resulting row is inserted into the same dedicated `unlocked_lessons`
-  // table (never `quiz_results`) so the student-facing pages can honour it.
   // -------------------------------------------------------------------------
   const handleDirectUnlock = useCallback(async () => {
     if (directUnlockBusy) return;
@@ -2667,66 +2647,6 @@ function StudentModal({
             />
           </section>
 
-          {/* Current Kitab / Course progress */}
-          <section>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-3 flex items-center gap-2">
-              <BookOpen className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-              የአሁን ኪታብ እና ደርስ
-            </h3>
-            {student.currentCourseName ? (
-              <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/30 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100 truncate">
-                      {student.currentCourseName}
-                    </p>
-                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-200/80">
-                      ደርስ {student.currentLessonNumber ?? 0} ላይ ይገኛሉ
-                    </p>
-                  </div>
-                  <span className="flex-shrink-0 text-xs font-bold text-emerald-800 dark:text-emerald-300 tabular-nums">
-                    {student.progressPercent}%
-                  </span>
-                </div>
-                <div className="mt-3 h-2 w-full rounded-full bg-white/70 dark:bg-emerald-950/40 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-amber-400 transition-all duration-500"
-                    style={{ width: `${student.progressPercent}%` }}
-                  />
-                </div>
-
-                {student.currentCourseId && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleUnlockNextLesson(student.currentCourseId!)
-                      }
-                      disabled={unlockingCourseId === student.currentCourseId}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors disabled:opacity-60"
-                    >
-                      {unlockingCourseId === student.currentCourseId ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Unlock className="h-3.5 w-3.5" />
-                      )}
-                      ቀጣዩን ደርስ ክፈት
-                    </button>
-                    <span className="text-[11px] text-emerald-800/80 dark:text-emerald-200/80">
-                      ተማሪው በቴክኒክ ችግር ምክንያት ሲዘገይ ብቻ ይጠቀሙበት።
-                    </span>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/30 p-4 text-center">
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  እስካሁን ምንም ኪታብ አልጀመሩም።
-                </p>
-              </div>
-            )}
-          </section>
-
           {/* Overall progress bar */}
           <section>
             <div className="flex items-center justify-between mb-2">
@@ -2747,14 +2667,6 @@ function StudentModal({
 
           {/* ================================================================== */}
           {/* DIRECT UNLOCK PANEL — kitab dropdown + lesson number / final exam */}
-          {/*                                                                    */}
-          {/* A simple, explicit form that lets the admin directly unlock a      */}
-          {/* specific lesson (or the final exam) for this student. This is      */}
-          {/* the cleanest alternative to the "unlock next lesson" button,        */}
-          {/* which requires the system to guess which lesson to unlock.          */}
-          {/*                                                                    */}
-          {/* Writes ONLY to the dedicated `unlocked_lessons` table — never to    */}
-          {/* `quiz_results` — so real quiz history remains intact.               */}
           {/* ================================================================== */}
           <section className="rounded-xl border border-violet-200 dark:border-violet-900/60 bg-violet-50/70 dark:bg-violet-950/30 p-4">
             <h3 className="text-sm font-bold text-violet-900 dark:text-violet-100 mb-2 flex items-center gap-2">
