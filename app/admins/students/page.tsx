@@ -39,7 +39,6 @@ import {
   CreditCard,
   Unlock,
   Pencil,
-  Trash2,
   Save,
   RotateCcw,
   Info,
@@ -87,6 +86,12 @@ interface ProfileRow {
 interface QuizRow {
   user_id: string;
   course_id: string;
+  /**
+   * Primary key of the lesson the attempt belongs to. This column is
+   * declared NOT NULL in the database, so it MUST always be carried
+   * through to any downstream INSERT/UPDATE operations.
+   */
+  lesson_id: string | null;
   score: number | null;
   total_questions: number | null;
   created_at: string | null;
@@ -94,6 +99,8 @@ interface QuizRow {
 
 interface LessonEntry {
   lessonNumber: number;
+  /** The `lessons.id` value of this attempt — needed for admin overrides. */
+  lessonId: string | null;
   score: number;
   total: number;
   percent: number;
@@ -254,6 +261,7 @@ function buildBreakdown(rows: QuizRow[]): CourseBreakdown[] {
       const pct = computePercent(s, t);
       return {
         lessonNumber: idx + 1,
+        lessonId: r.lesson_id ? String(r.lesson_id) : null,
         score: s,
         total: t,
         percent: pct,
@@ -303,6 +311,115 @@ function buildFlatLessons(breakdown: CourseBreakdown[]): LessonEntry[] {
     return ta - tb;
   });
   return all;
+}
+
+/**
+ * Resolve the next valid `lesson_id` for a given course.
+ *
+ * The `quiz_results.lesson_id` column is NOT NULL, so every admin insert
+ * MUST supply a real primary key from the `lessons` table. This helper
+ * probes several schema variants (modern `course_id` FK, legacy `book_id`
+ * FK, multiple ordering columns) and returns:
+ *
+ *   1. The first lesson the student has NOT yet attempted (preferred),
+ *      OR
+ *   2. The very last lesson when every lesson has been attempted,
+ *      OR
+ *   3. `null` when the `lessons` table cannot be queried at all — the
+ *      caller then shows an explicit error to the admin instead of
+ *      sending a NULL `lesson_id` to the DB.
+ */
+async function fetchNextLessonIdForCourse(
+  courseId: string,
+  attemptedLessonIds: Set<string>
+): Promise<{ lessonId: string | null; reason: string }> {
+  const idColumns: Array<'course_id' | 'book_id'> = [
+    'course_id',
+    'book_id',
+  ];
+  const orderColumns: Array<string | null> = [
+    'order_index',
+    'lesson_number',
+    'position',
+    'created_at',
+    null,
+  ];
+
+  console.group(
+    `[fetchNextLessonIdForCourse] Resolving lesson_id for course "${courseId}"`
+  );
+  console.log(
+    'Already-attempted lesson_ids:',
+    Array.from(attemptedLessonIds)
+  );
+
+  for (const idCol of idColumns) {
+    for (const orderCol of orderColumns) {
+      try {
+        const cols = ['id', idCol];
+        if (orderCol) cols.push(orderCol);
+
+        let query = supabase
+          .from('lessons')
+          .select(cols.join(', '))
+          .eq(idCol, courseId);
+
+        if (orderCol) {
+          query = query.order(orderCol, { ascending: true });
+        }
+
+        const { data, error } = await query;
+        if (error || !data || data.length === 0) {
+          console.log(
+            `[fetchNextLessonIdForCourse] Variant (idCol=${idCol}, orderCol=${orderCol}) → no data / error:`,
+            error?.message ?? 'empty'
+          );
+          continue;
+        }
+
+        const rows = data as Array<Record<string, any>>;
+        console.log(
+          `[fetchNextLessonIdForCourse] Variant (idCol=${idCol}, orderCol=${orderCol}) → ${rows.length} rows:`,
+          rows
+        );
+
+        // 1. Prefer the first lesson that has NOT been attempted yet.
+        for (const row of rows) {
+          const id = String(row?.id ?? '');
+          if (id && !attemptedLessonIds.has(id)) {
+            console.groupEnd();
+            return {
+              lessonId: id,
+              reason: `resolved via lessons.${idCol} (order=${orderCol ?? 'none'}) — first unattempted lesson`,
+            };
+          }
+        }
+
+        // 2. Every lesson has already been attempted → credit the last one.
+        const lastRow = rows[rows.length - 1];
+        const lastId = String(lastRow?.id ?? '');
+        if (lastId) {
+          console.groupEnd();
+          return {
+            lessonId: lastId,
+            reason: `resolved via lessons.${idCol} (order=${orderCol ?? 'none'}) — last lesson (all attempted)`,
+          };
+        }
+      } catch (err) {
+        console.log(
+          `[fetchNextLessonIdForCourse] Variant (idCol=${idCol}, orderCol=${orderCol}) threw:`,
+          err
+        );
+      }
+    }
+  }
+
+  console.groupEnd();
+  return {
+    lessonId: null,
+    reason:
+      'no rows returned from `lessons` table for any known schema variant',
+  };
 }
 
 function downloadCSV(rows: StudentRow[]) {
@@ -543,43 +660,74 @@ export default function AdminStudentsPage() {
     }
 
     // ---- B) QUIZ RESULTS (optional, SILENT on failure) ----
+    // Prefer including `lesson_id` (NOT NULL in DB — required for admin
+    // override inserts). Fall back gracefully when the column isn't
+    // available in the current schema.
     let quizRows: QuizRow[] = [];
     try {
       const { data, error } = await supabase
         .from('quiz_results')
-        .select('user_id, course_id, score, total_questions, created_at');
+        .select(
+          'user_id, course_id, lesson_id, score, total_questions, created_at'
+        );
 
       if (error) {
         console.warn(
-          '[AdminStudents] Primary quiz_results select failed, retrying minimal columns:',
+          '[AdminStudents] Primary quiz_results select (with lesson_id) failed, retrying without lesson_id:',
           error.message
         );
 
+        // Attempt 2: without lesson_id
         const fallback = await supabase
           .from('quiz_results')
-          .select('user_id, course_id, score, total_questions');
+          .select('user_id, course_id, score, total_questions, created_at');
 
         if (fallback.error) {
-          console.error(
-            'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
-            fallback.error
+          console.warn(
+            '[AdminStudents] Secondary quiz_results select failed, retrying minimal columns:',
+            fallback.error.message
           );
-          quizRows = [];
-        } else {
-          quizRows = ((fallback.data ?? []) as Array<Record<string, any>>).map(
-            (q) => ({
+
+          // Attempt 3: absolute minimal
+          const minimal = await supabase
+            .from('quiz_results')
+            .select('user_id, course_id, score, total_questions');
+
+          if (minimal.error) {
+            console.error(
+              'DEBUG_SUPABASE_ERROR (quiz_results, non-fatal):',
+              minimal.error
+            );
+            quizRows = [];
+          } else {
+            quizRows = ((minimal.data ?? []) as Array<
+              Record<string, any>
+            >).map((q) => ({
               user_id: String(q.user_id ?? ''),
               course_id: String(q.course_id ?? ''),
+              lesson_id: null,
               score: (q.score as number | null) ?? null,
               total_questions: (q.total_questions as number | null) ?? null,
               created_at: null,
-            })
-          );
+            }));
+          }
+        } else {
+          quizRows = ((fallback.data ?? []) as Array<
+            Record<string, any>
+          >).map((q) => ({
+            user_id: String(q.user_id ?? ''),
+            course_id: String(q.course_id ?? ''),
+            lesson_id: null,
+            score: (q.score as number | null) ?? null,
+            total_questions: (q.total_questions as number | null) ?? null,
+            created_at: (q.created_at as string | null) ?? null,
+          }));
         }
       } else {
         quizRows = ((data ?? []) as Array<Record<string, any>>).map((q) => ({
           user_id: String(q.user_id ?? ''),
           course_id: String(q.course_id ?? ''),
+          lesson_id: (q.lesson_id as string | null) ?? null,
           score: (q.score as number | null) ?? null,
           total_questions: (q.total_questions as number | null) ?? null,
           created_at: (q.created_at as string | null) ?? null,
@@ -1061,15 +1209,9 @@ export default function AdminStudentsPage() {
       {/* Main                                                               */}
       {/* ================================================================= */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {/* ============================================================ */}
-        {/* SECTION-SELECTOR CARDS — top summary cards                    */}
-        {/*                                                              */}
-        {/* Two prominent clickable cards that swap between the two       */}
-        {/* mutually-exclusive tables. Each card shows the student count  */}
-        {/* for its view and is highlighted when active.                  */}
-        {/* ============================================================ */}
+        {/* SECTION-SELECTOR CARDS — top summary cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4">
-          {/* Card — ጠቅላላ ተማሪዎች (contact list view) */}
+          {/* Card — ጠቅላላ ተማሪዎች */}
           <button
             type="button"
             onClick={handleShowAllStudents}
@@ -1102,7 +1244,7 @@ export default function AdminStudentsPage() {
             </div>
           </button>
 
-          {/* Card — የተማሪዎች መቆጣጠሪያ (progress & score view) */}
+          {/* Card — የተማሪዎች መቆጣጠሪያ */}
           <button
             type="button"
             onClick={handleShowMonitor}
@@ -1136,9 +1278,8 @@ export default function AdminStudentsPage() {
           </button>
         </div>
 
-        {/* ---------- Primary Filter Stats (4 Interactive Cards) ---------- */}
+        {/* Primary Filter Stats (4 Interactive Cards) */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
-          {/* Card — Pending payments */}
           <StatCard
             label="ማረጋገጫ የሚጠብቁ ክፍያዎች"
             value={String(pendingPayments)}
@@ -1148,7 +1289,6 @@ export default function AdminStudentsPage() {
             onClick={() => handleStatCardClick('pending_payments')}
           />
 
-          {/* Card — Active today */}
           <StatCard
             label="ዛሬ ንቁ የነበሩ"
             value={String(activeTodayCount)}
@@ -1158,7 +1298,6 @@ export default function AdminStudentsPage() {
             onClick={() => handleStatCardClick('active_today')}
           />
 
-          {/* Card — New this week */}
           <StatCard
             label="በዚህ ሳምንት አዲስ የተመዘገቡ"
             value={String(newThisWeekCount)}
@@ -1168,7 +1307,6 @@ export default function AdminStudentsPage() {
             onClick={() => handleStatCardClick('new_this_week')}
           />
 
-          {/* Card — Completed students (informational only) */}
           <StatCard
             label="የጨረሱ ተማሪዎች"
             value={String(stats.completedCount)}
@@ -1178,7 +1316,7 @@ export default function AdminStudentsPage() {
           />
         </div>
 
-        {/* ---------- Quick-filter indicator ---------- */}
+        {/* Quick-filter indicator */}
         {activeView === 'list' && quickFilter !== 'none' && (
           <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 px-3.5 py-2 text-xs">
             <span className="font-semibold text-emerald-800 dark:text-emerald-300">
@@ -1202,7 +1340,7 @@ export default function AdminStudentsPage() {
           </div>
         )}
 
-        {/* ---------- Secondary Summary Strip ---------- */}
+        {/* Secondary Summary Strip */}
         <div className="mb-5 grid grid-cols-3 gap-3">
           <SmallStat
             label="የጨረሱ ተማሪዎች"
@@ -1221,7 +1359,7 @@ export default function AdminStudentsPage() {
           />
         </div>
 
-        {/* ---------- Toolbar ---------- */}
+        {/* Toolbar */}
         <div className="mb-5 flex flex-col lg:flex-row lg:items-center gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -1268,7 +1406,7 @@ export default function AdminStudentsPage() {
           </button>
         </div>
 
-        {/* ---------- ERROR BANNER ---------- */}
+        {/* ERROR BANNER */}
         {errorMessage && (
           <div
             role="alert"
@@ -1292,9 +1430,7 @@ export default function AdminStudentsPage() {
           </div>
         )}
 
-        {/* ================================================================ */}
-        {/* ACTIVE VIEW — only ONE table is rendered at a time.              */}
-        {/* ================================================================ */}
+        {/* ACTIVE VIEW — only ONE table is rendered at a time */}
         {activeView === 'list' ? (
           <section>
             <div className="flex items-center justify-between gap-3 mb-3">
@@ -1457,7 +1593,6 @@ export default function AdminStudentsPage() {
                           key={`monitor-${s.id}`}
                           className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
                         >
-                          {/* Student name */}
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
                               <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 text-white text-sm font-bold">
@@ -1476,7 +1611,6 @@ export default function AdminStudentsPage() {
                             </div>
                           </td>
 
-                          {/* Current kitab + lesson */}
                           <td className="px-5 py-4">
                             {s.currentCourseName ? (
                               <div className="flex flex-col">
@@ -1495,7 +1629,6 @@ export default function AdminStudentsPage() {
                             )}
                           </td>
 
-                          {/* Progress % */}
                           <td className="px-5 py-4">
                             <div className="flex flex-col gap-1.5 min-w-[130px]">
                               <div className="flex items-center justify-between gap-2">
@@ -1515,7 +1648,6 @@ export default function AdminStudentsPage() {
                             </div>
                           </td>
 
-                          {/* Quiz score chips */}
                           <td className="px-5 py-4">
                             {s.flatLessons.length === 0 ? (
                               <span className="text-xs text-slate-400 dark:text-slate-500 italic">
@@ -1550,7 +1682,6 @@ export default function AdminStudentsPage() {
                             )}
                           </td>
 
-                          {/* Action */}
                           <td className="px-5 py-4 text-right">
                             <button
                               type="button"
@@ -1576,9 +1707,7 @@ export default function AdminStudentsPage() {
         </p>
       </main>
 
-      {/* ================================================================= */}
-      {/* Detail + Override Modal                                            */}
-      {/* ================================================================= */}
+      {/* Detail + Override Modal */}
       {selected && (
         <StudentModal
           student={selected}
@@ -1587,9 +1716,7 @@ export default function AdminStudentsPage() {
         />
       )}
 
-      {/* ================================================================= */}
-      {/* Announcement / Notification Composer Modal                         */}
-      {/* ================================================================= */}
+      {/* Announcement / Notification Composer Modal */}
       {announceOpen && (
         <AnnouncementModal
           title={announceTitle}
@@ -1750,12 +1877,6 @@ function StudentModal({
 }) {
   // -------------------------------------------------------------------------
   // Local override state
-  //
-  //   editingKey    → identifies the lesson row currently in edit mode
-  //                   (format: `<courseId>::<date>`)
-  //   editScore     → the new score the admin typed
-  //   busyKey       → identifies the row with an in-flight operation
-  //   feedback      → inline success/error message shown in the modal
   // -------------------------------------------------------------------------
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editScore, setEditScore] = useState('');
@@ -1786,26 +1907,29 @@ function StudentModal({
 
   const cleanPhone = student.phone.replace(/\s+/g, '');
 
-  const lessonKey = (courseId: string, date: string | null) =>
-    `${courseId}::${date ?? ''}`;
+  /**
+   * Stable per-row identity — prefers the real `lesson_id` when we have
+   * it, and falls back to the timestamp for legacy rows where the column
+   * was not fetched.
+   */
+  const lessonKey = (
+    courseId: string,
+    lessonId: string | null,
+    date: string | null
+  ) => `${courseId}::${lessonId ?? date ?? ''}`;
 
   // -------------------------------------------------------------------------
   // ADMIN OVERRIDE — Save new score
   //
-  // Directly updates the matching `quiz_results` row identified by
-  // user_id + course_id + created_at. This preserves the existing schema
-  // (no column changes) and immediately refreshes the parent data.
+  // Prefers the exact `lesson_id` when available (unique + guaranteed),
+  // and falls back to `created_at` for legacy rows.
   // -------------------------------------------------------------------------
   const handleSaveScore = useCallback(
-    async (courseId: string, lessonDate: string | null) => {
-      if (!lessonDate) {
-        setFeedback({
-          type: 'error',
-          text: 'የዚህ ሙከራ ቀን አልተገኘም። ማስተካከል አልተቻለም።',
-        });
-        return;
-      }
-
+    async (
+      courseId: string,
+      lessonId: string | null,
+      lessonDate: string | null
+    ) => {
       const trimmed = editScore.trim();
       if (trimmed === '') {
         setFeedback({
@@ -1815,7 +1939,7 @@ function StudentModal({
         return;
       }
 
-      // Accept "3" or "3/5". Parse the numerator (or full number).
+      // Accept "3" or "3/5". Parse the numerator (or the full number).
       let newScore = 0;
       if (trimmed.includes('/')) {
         const [num] = trimmed.split('/');
@@ -1832,24 +1956,51 @@ function StudentModal({
         return;
       }
 
-      setBusyKey(lessonKey(courseId, lessonDate));
+      if (!lessonId && !lessonDate) {
+        setFeedback({
+          type: 'error',
+          text: 'የዚህ ሙከራ መለያ (lesson_id) ወይም ቀን አልተገኘም። ማስተካከል አልተቻለም።',
+        });
+        return;
+      }
+
+      console.group('[AdminOverride] SaveScore');
+      console.log('Student ID:', student.id);
+      console.log('Course ID:', courseId);
+      console.log('Lesson ID:', lessonId);
+      console.log('Lesson date:', lessonDate);
+      console.log('New score:', newScore);
+
+      setBusyKey(lessonKey(courseId, lessonId, lessonDate));
       setFeedback(null);
 
       try {
-        const { error } = await supabase
+        let query = supabase
           .from('quiz_results')
           .update({ score: newScore })
           .eq('user_id', student.id)
-          .eq('course_id', courseId)
-          .eq('created_at', lessonDate);
+          .eq('course_id', courseId);
+
+        if (lessonId) {
+          query = query.eq('lesson_id', lessonId);
+        } else if (lessonDate) {
+          query = query.eq('created_at', lessonDate);
+        }
+
+        const { error } = await query;
 
         if (error) {
+          console.error('[AdminOverride] SaveScore failed. Full error:', error);
+          console.groupEnd();
           setFeedback({
             type: 'error',
             text: `ማስተካከል አልተቻለም፡ ${error.message}`,
           });
           return;
         }
+
+        console.log('[AdminOverride] SaveScore success');
+        console.groupEnd();
 
         setFeedback({
           type: 'success',
@@ -1859,6 +2010,8 @@ function StudentModal({
         setEditScore('');
         await onRefresh();
       } catch (err) {
+        console.error('[AdminOverride] SaveScore unexpected error:', err);
+        console.groupEnd();
         setFeedback({
           type: 'error',
           text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
@@ -1872,16 +2025,17 @@ function StudentModal({
 
   // -------------------------------------------------------------------------
   // ADMIN OVERRIDE — Delete quiz attempt (allow retake)
-  //
-  // Removes the specific `quiz_results` row so the student can retake the
-  // lesson from scratch. The parent is refreshed immediately afterwards.
   // -------------------------------------------------------------------------
   const handleDeleteAttempt = useCallback(
-    async (courseId: string, lessonDate: string | null) => {
-      if (!lessonDate) {
+    async (
+      courseId: string,
+      lessonId: string | null,
+      lessonDate: string | null
+    ) => {
+      if (!lessonId && !lessonDate) {
         setFeedback({
           type: 'error',
-          text: 'የዚህ ሙከራ ቀን አልተገኘም። ማጥፋት አልተቻለም።',
+          text: 'የዚህ ሙከራ መለያ (lesson_id) ወይም ቀን አልተገኘም። ማጥፋት አልተቻለም።',
         });
         return;
       }
@@ -1891,18 +2045,36 @@ function StudentModal({
       );
       if (!confirmed) return;
 
-      setBusyKey(lessonKey(courseId, lessonDate));
+      console.group('[AdminOverride] DeleteAttempt');
+      console.log('Student ID:', student.id);
+      console.log('Course ID:', courseId);
+      console.log('Lesson ID:', lessonId);
+      console.log('Lesson date:', lessonDate);
+
+      setBusyKey(lessonKey(courseId, lessonId, lessonDate));
       setFeedback(null);
 
       try {
-        const { error } = await supabase
+        let query = supabase
           .from('quiz_results')
           .delete()
           .eq('user_id', student.id)
-          .eq('course_id', courseId)
-          .eq('created_at', lessonDate);
+          .eq('course_id', courseId);
+
+        if (lessonId) {
+          query = query.eq('lesson_id', lessonId);
+        } else if (lessonDate) {
+          query = query.eq('created_at', lessonDate);
+        }
+
+        const { error } = await query;
 
         if (error) {
+          console.error(
+            '[AdminOverride] DeleteAttempt failed. Full error:',
+            error
+          );
+          console.groupEnd();
           setFeedback({
             type: 'error',
             text: `ማጥፋት አልተቻለም፡ ${error.message}`,
@@ -1910,12 +2082,17 @@ function StudentModal({
           return;
         }
 
+        console.log('[AdminOverride] DeleteAttempt success');
+        console.groupEnd();
+
         setFeedback({
           type: 'success',
           text: 'የፈተናው ሙከራ ተሰርዟል። ተማሪው እንደገና መፈተን ይችላል።',
         });
         await onRefresh();
       } catch (err) {
+        console.error('[AdminOverride] DeleteAttempt unexpected error:', err);
+        console.groupEnd();
         setFeedback({
           type: 'error',
           text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
@@ -1930,50 +2107,178 @@ function StudentModal({
   // -------------------------------------------------------------------------
   // ADMIN OVERRIDE — Unlock the next lesson
   //
-  // Inserts a passing `quiz_results` row for the target course. This is a
-  // safe, additive operation that never deletes or modifies existing rows;
-  // it simply credits the student with a passed lesson so the next lesson
-  // in the curriculum becomes accessible.
+  // FIX for "null value in column 'lesson_id'":
+  //   The `quiz_results.lesson_id` column is NOT NULL, so we MUST resolve
+  //   a real primary key from the `lessons` table BEFORE inserting. We
+  //   probe several schema variants and pick the first lesson the student
+  //   has not yet attempted (falling back to the last lesson when all
+  //   lessons have already been attempted).
   //
-  // The denominator defaults to `DEFAULT_UNLOCK_TOTAL_QUESTIONS`, and the
-  // score is set to the minimum passing threshold so the row is marked as
-  // "passed" by the aggregation logic downstream.
+  //   If the lesson_id cannot be resolved, we abort and show an explicit
+  //   error to the admin instead of sending a NULL to Supabase.
+  //
+  // Detailed debug logging records the exact payload sent to Supabase so
+  // any future constraint failure can be diagnosed from the browser
+  // console.
   // -------------------------------------------------------------------------
   const handleUnlockNextLesson = useCallback(
     async (courseId: string) => {
+      console.group('[AdminOverride] UnlockNextLesson');
+      console.log('Student ID:', student.id);
+      console.log('Student name:', student.fullName);
+      console.log('Course ID:', courseId);
+
       setUnlockingCourseId(courseId);
       setFeedback(null);
 
       try {
-        const total = DEFAULT_UNLOCK_TOTAL_QUESTIONS;
-        const passingScore = Math.ceil(
-          (total * PASS_THRESHOLD_PERCENT) / 100
+        // 1. Build the set of lesson_ids the student has already attempted
+        //    for this course. This drives "pick the next unattempted" logic.
+        const attemptedLessonIds = new Set<string>();
+        const courseBreakdown = student.breakdown.find(
+          (b) => b.courseId === courseId
+        );
+        if (courseBreakdown) {
+          for (const l of courseBreakdown.lessons) {
+            if (l.lessonId) attemptedLessonIds.add(l.lessonId);
+          }
+        }
+        console.log(
+          'Already-attempted lesson_ids for this course:',
+          Array.from(attemptedLessonIds)
         );
 
-        const { error } = await supabase
-          .from('quiz_results')
-          .insert({
-            user_id: student.id,
-            course_id: courseId,
-            score: passingScore,
-            total_questions: total,
-            created_at: new Date().toISOString(),
-          });
+        // 2. Resolve a valid `lesson_id` from the `lessons` table.
+        const resolved = await fetchNextLessonIdForCourse(
+          courseId,
+          attemptedLessonIds
+        );
+        const nextLessonId = resolved.lessonId;
 
-        if (error) {
+        console.log('Resolved lesson_id:', nextLessonId);
+        console.log('Resolution reason:', resolved.reason);
+
+        if (!nextLessonId) {
+          console.error(
+            '[AdminOverride] UnlockNextLesson aborted — no valid lesson_id could be resolved.'
+          );
+          console.error(
+            'Attempted lesson_ids snapshot:',
+            Array.from(attemptedLessonIds)
+          );
+          console.groupEnd();
           setFeedback({
             type: 'error',
-            text: `ቀጣዩን ደርስ መክፈት አልተቻለም፡ ${error.message}`,
+            text:
+              '❌ የትምህርቱ ደርስ መለያ (lesson_id) ማግኘት አልተቻለም። እባክዎ በ `lessons` ሰንጠረዥ ውስጥ ለዚህ ኮርስ ደርሶች መኖራቸውን ያረጋግጡ። ' +
+              `(course_id: ${courseId})`,
           });
           return;
         }
 
+        // 3. Build the exact payload. `lesson_id` is now guaranteed to be
+        //    a non-null string that exists in the `lessons` table.
+        const total = DEFAULT_UNLOCK_TOTAL_QUESTIONS;
+        const passingScore = Math.ceil(
+          (total * PASS_THRESHOLD_PERCENT) / 100
+        );
+        const createdAt = new Date().toISOString();
+
+        const insertPayload = {
+          user_id: student.id,
+          course_id: courseId,
+          lesson_id: nextLessonId,
+          score: passingScore,
+          total_questions: total,
+          created_at: createdAt,
+        };
+
+        console.log(
+          '[AdminOverride] Final INSERT payload → quiz_results:',
+          insertPayload
+        );
+        console.log(
+          '[AdminOverride] Payload JSON:',
+          JSON.stringify(insertPayload, null, 2)
+        );
+
+        // 4. Sanity-check every required field before sending the request.
+        const missingFields: string[] = [];
+        if (!insertPayload.user_id) missingFields.push('user_id');
+        if (!insertPayload.course_id) missingFields.push('course_id');
+        if (!insertPayload.lesson_id) missingFields.push('lesson_id');
+        if (
+          typeof insertPayload.score !== 'number' ||
+          Number.isNaN(insertPayload.score)
+        ) {
+          missingFields.push('score');
+        }
+        if (
+          typeof insertPayload.total_questions !== 'number' ||
+          Number.isNaN(insertPayload.total_questions)
+        ) {
+          missingFields.push('total_questions');
+        }
+
+        if (missingFields.length > 0) {
+          const msg = `❌ የሚከተሉት የግዴታ መስኮች ጎድለዋል፡ ${missingFields.join(
+            ', '
+          )}። እባክዎ እንደገና ይሞክሩ።`;
+          console.error('[AdminOverride] Aborting — missing fields:', missingFields);
+          console.groupEnd();
+          setFeedback({ type: 'error', text: msg });
+          return;
+        }
+
+        // 5. Perform the insert.
+        const { data: insertedRows, error } = await supabase
+          .from('quiz_results')
+          .insert(insertPayload)
+          .select();
+
+        if (error) {
+          console.error(
+            '[AdminOverride] Supabase INSERT failed. Full error object:',
+            error
+          );
+          console.error(
+            '[AdminOverride] Supabase INSERT failed. JSON:',
+            JSON.stringify(error, null, 2)
+          );
+          console.groupEnd();
+
+          // Try to give a specific, actionable message based on the error.
+          const errorText = String(error.message || '');
+          let hint = '';
+          if (errorText.includes('lesson_id')) {
+            hint = ' (lesson_id ላይ ችግር አለ — እባክዎ የ lessons ሰንጠረዥን ያረጋግጡ)';
+          } else if (errorText.includes('user_id')) {
+            hint = ' (user_id ላይ ችግር አለ)';
+          } else if (errorText.includes('course_id')) {
+            hint = ' (course_id ላይ ችግር አለ)';
+          }
+
+          setFeedback({
+            type: 'error',
+            text: `ቀጣዩን ደርስ መክፈት አልተቻለም፡ ${error.message}${hint}`,
+          });
+          return;
+        }
+
+        console.log(
+          '[AdminOverride] Supabase INSERT success. Returned rows:',
+          insertedRows
+        );
+        console.groupEnd();
+
         setFeedback({
           type: 'success',
-          text: 'ቀጣዩ ደርስ በተሳካ ሁኔታ ተከፍቷል።',
+          text: `ቀጣዩ ደርስ በተሳካ ሁኔታ ተከፍቷል። (lesson_id: ${nextLessonId})`,
         });
         await onRefresh();
       } catch (err) {
+        console.error('[AdminOverride] UnlockNextLesson unexpected error:', err);
+        console.groupEnd();
         setFeedback({
           type: 'error',
           text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
@@ -1982,15 +2287,16 @@ function StudentModal({
         setUnlockingCourseId(null);
       }
     },
-    [student.id, onRefresh]
+    [student.id, student.fullName, student.breakdown, onRefresh]
   );
 
   const startEditing = (
     courseId: string,
+    lessonId: string | null,
     lessonDate: string | null,
     currentScore: number
   ) => {
-    setEditingKey(lessonKey(courseId, lessonDate));
+    setEditingKey(lessonKey(courseId, lessonId, lessonDate));
     setEditScore(String(currentScore));
     setFeedback(null);
   };
@@ -2058,7 +2364,7 @@ function StudentModal({
               ) : (
                 <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
               )}
-              <span className="flex-1">{feedback.text}</span>
+              <span className="flex-1 break-words">{feedback.text}</span>
               <button
                 type="button"
                 onClick={() => setFeedback(null)}
@@ -2164,7 +2470,6 @@ function StudentModal({
                   />
                 </div>
 
-                {/* Unlock next lesson — inline action */}
                 {student.currentCourseId && (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <button
@@ -2220,7 +2525,8 @@ function StudentModal({
             <Info className="h-4 w-4 shrink-0 mt-0.5" />
             <span>
               የአስተዳዳሪ ማስተካከያ መሳሪያዎች፡ የተማሪውን የፈተና ነጥብ ማስተካከል፣ የተሳሳተ
-              ሙከራ ማጥፋት እና ቀጣይ ደርስ መክፈት ይችላሉ።
+              ሙከራ ማጥፋት እና ቀጣይ ደርስ መክፈት ይችላሉ። ማንኛውም ስህተት ከተከሰተ ዝርዝር
+              መረጃ በ browser console ውስጥ ይታያል።
             </span>
           </section>
 
@@ -2303,6 +2609,7 @@ function StudentModal({
                       {course.lessons.map((lesson) => {
                         const key = lessonKey(
                           course.courseId,
+                          lesson.lessonId,
                           lesson.date
                         );
                         const isEditing = editingKey === key;
@@ -2354,6 +2661,7 @@ function StudentModal({
                                     onClick={() =>
                                       handleSaveScore(
                                         course.courseId,
+                                        lesson.lessonId,
                                         lesson.date
                                       )
                                     }
@@ -2392,6 +2700,7 @@ function StudentModal({
                                     onClick={() =>
                                       startEditing(
                                         course.courseId,
+                                        lesson.lessonId,
                                         lesson.date,
                                         lesson.score
                                       )
@@ -2407,6 +2716,7 @@ function StudentModal({
                                     onClick={() =>
                                       handleDeleteAttempt(
                                         course.courseId,
+                                        lesson.lessonId,
                                         lesson.date
                                       )
                                     }
@@ -2692,7 +3002,7 @@ function AnnouncementModal({
             {sending ? 'በመላክ ላይ...' : 'ላክ'}
           </button>
         </div>
-      </div>.
+      </div>
     </div>
   );
 }
