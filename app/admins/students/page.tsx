@@ -69,6 +69,14 @@ const COURSE_NAME_BY_SLUG = new Map(
 const PASS_THRESHOLD_PERCENT = 50;
 
 /**
+ * Sentinel `lesson_id` value used to represent the FINAL EXAM of a course.
+ * The course detail page and the lesson detail page both expect this
+ * value when the admin grants the final exam via the `unlocked_lessons`
+ * table.
+ */
+const FINAL_EXAM_LESSON_ID = 999;
+
+/**
  * Order of preference for the dedicated unlock table. The first table
  * that exists and accepts the insert wins. These tables are expected to
  * have at least the columns: `user_id`, `course_id`, `lesson_id`.
@@ -1988,6 +1996,29 @@ function StudentModal({
   );
   const [feedback, setFeedback] = useState<FeedbackMessage | null>(null);
 
+  // -------------------------------------------------------------------------
+  // DIRECT UNLOCK FORM STATE
+  //
+  // A simple, focused form that lets the admin directly grant access to a
+  // specific lesson (or the final exam) for the current student without
+  // having to guess the lesson id or search through the whole course.
+  //
+  //   directUnlockCourseId → which kitab to unlock (defaults to the first
+  //                          required course).
+  //   directUnlockLessonStr → the lesson number as a raw string (validated
+  //                           as an integer 1-100 on submit).
+  //   directUnlockIsFinal  → when true, unlocks the FINAL EXAM of the
+  //                          selected course (uses the sentinel id 999).
+  //   directUnlockBusy     → in-flight flag for the "Unlock" button.
+  // -------------------------------------------------------------------------
+  const [directUnlockCourseId, setDirectUnlockCourseId] = useState<string>(
+    REQUIRED_COURSES[0]?.slug ?? 'usul_al_thalatha'
+  );
+  const [directUnlockLessonStr, setDirectUnlockLessonStr] =
+    useState<string>('1');
+  const [directUnlockIsFinal, setDirectUnlockIsFinal] = useState(false);
+  const [directUnlockBusy, setDirectUnlockBusy] = useState(false);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -2331,6 +2362,160 @@ function StudentModal({
     [student.id, student.fullName, student.breakdown, onRefresh]
   );
 
+  // -------------------------------------------------------------------------
+  // ADMIN DIRECT UNLOCK — kitab + lesson number
+  //
+  // A simplified, explicit alternative to `handleUnlockNextLesson`. The
+  // admin picks the kitab from a dropdown and either:
+  //   • enters a specific lesson number (1–100), OR
+  //   • ticks "Final Quiz" to unlock the final exam of that kitab.
+  //
+  // The resulting row is inserted into the same dedicated `unlocked_lessons`
+  // table (never `quiz_results`) so the student-facing pages can honour it.
+  // -------------------------------------------------------------------------
+  const handleDirectUnlock = useCallback(async () => {
+    if (directUnlockBusy) return;
+
+    const courseId = directUnlockCourseId.trim();
+    if (!courseId) {
+      setFeedback({
+        type: 'error',
+        text: 'እባክዎ ኪታብ ይምረጡ።',
+      });
+      return;
+    }
+
+    let lessonIdValue = '';
+    if (directUnlockIsFinal) {
+      lessonIdValue = String(FINAL_EXAM_LESSON_ID);
+    } else {
+      const n = parseInt(directUnlockLessonStr, 10);
+      if (!Number.isFinite(n) || n < 1 || n > 100) {
+        setFeedback({
+          type: 'error',
+          text: 'ትክክለኛ የደርስ ቁጥር ያስገቡ (1-100)።',
+        });
+        return;
+      }
+      lessonIdValue = String(n);
+    }
+
+    console.group('[AdminDirectUnlock]');
+    console.log('Student ID:', student.id);
+    console.log('Course ID:', courseId);
+    console.log('Lesson ID:', lessonIdValue);
+    console.log('Is Final Exam:', directUnlockIsFinal);
+
+    setDirectUnlockBusy(true);
+    setFeedback(null);
+
+    try {
+      const unlockedAt = new Date().toISOString();
+      const payload = {
+        user_id: student.id,
+        course_id: courseId,
+        lesson_id: lessonIdValue,
+        unlocked_at: unlockedAt,
+      };
+
+      console.log('[AdminDirectUnlock] Insert payload:', payload);
+
+      let lastError = '';
+      let inserted = false;
+
+      for (const tableName of UNLOCK_TABLE_CANDIDATES) {
+        try {
+          const { error } = await supabase.from(tableName).insert(payload);
+
+          if (!error) {
+            inserted = true;
+            console.log(
+              `[AdminDirectUnlock] Recorded successfully in "${tableName}".`
+            );
+            break;
+          }
+
+          lastError = error.message;
+          console.log(
+            `[AdminDirectUnlock] Attempt on "${tableName}" failed:`,
+            lastError
+          );
+
+          const lower = lastError.toLowerCase();
+          const tableMissing =
+            lower.includes('does not exist') ||
+            lower.includes('relation') ||
+            lower.includes('schema cache') ||
+            lower.includes('could not find the table') ||
+            lower.includes('not find the table');
+
+          if (!tableMissing) {
+            console.error(
+              `[AdminDirectUnlock] Failed on "${tableName}" for a NON-schema reason:`,
+              lastError
+            );
+            console.groupEnd();
+            setFeedback({
+              type: 'error',
+              text: `መክፈት አልተቻለም፡ ${lastError}`,
+            });
+            return;
+          }
+        } catch (innerErr) {
+          lastError = describeError(innerErr);
+          console.log(
+            `[AdminDirectUnlock] Attempt on "${tableName}" threw:`,
+            lastError
+          );
+        }
+      }
+
+      if (!inserted) {
+        console.error(
+          '[AdminDirectUnlock] No supported unlock table found. Last error:',
+          lastError
+        );
+        console.groupEnd();
+        setFeedback({
+          type: 'error',
+          text:
+            '❌ ደርሱን ለመክፈት የሚያስችል የተዘጋጀ ሠንጠረዥ አልተገኘም። ' +
+            'እባክዎ `unlocked_lessons` የተባለ ሠንጠረዥ (user_id, course_id, lesson_id, unlocked_at) ይፍጠሩ።',
+        });
+        return;
+      }
+
+      console.groupEnd();
+
+      const courseName =
+        COURSE_NAME_BY_SLUG.get(courseId) ?? courseId;
+      setFeedback({
+        type: 'success',
+        text: directUnlockIsFinal
+          ? `የ${courseName} የመጨረሻ ፈተና በተሳካ ሁኔታ ተከፍቷል።`
+          : `የ${courseName} ደርስ ${lessonIdValue} በተሳካ ሁኔታ ተከፍቷል።`,
+      });
+
+      await onRefresh();
+    } catch (err) {
+      console.error('[AdminDirectUnlock] Unexpected error:', err);
+      console.groupEnd();
+      setFeedback({
+        type: 'error',
+        text: `ያልታወቀ ስህተት፡ ${describeError(err)}`,
+      });
+    } finally {
+      setDirectUnlockBusy(false);
+    }
+  }, [
+    directUnlockBusy,
+    directUnlockCourseId,
+    directUnlockIsFinal,
+    directUnlockLessonStr,
+    student.id,
+    onRefresh,
+  ]);
+
   const startEditing = (
     courseId: string,
     lessonId: string | null,
@@ -2558,6 +2743,108 @@ function StudentModal({
                 style={{ width: `${student.progressPercent}%` }}
               />
             </div>
+          </section>
+
+          {/* ================================================================== */}
+          {/* DIRECT UNLOCK PANEL — kitab dropdown + lesson number / final exam */}
+          {/*                                                                    */}
+          {/* A simple, explicit form that lets the admin directly unlock a      */}
+          {/* specific lesson (or the final exam) for this student. This is      */}
+          {/* the cleanest alternative to the "unlock next lesson" button,        */}
+          {/* which requires the system to guess which lesson to unlock.          */}
+          {/*                                                                    */}
+          {/* Writes ONLY to the dedicated `unlocked_lessons` table — never to    */}
+          {/* `quiz_results` — so real quiz history remains intact.               */}
+          {/* ================================================================== */}
+          <section className="rounded-xl border border-violet-200 dark:border-violet-900/60 bg-violet-50/70 dark:bg-violet-950/30 p-4">
+            <h3 className="text-sm font-bold text-violet-900 dark:text-violet-100 mb-2 flex items-center gap-2">
+              <Unlock className="h-4 w-4 text-violet-700 dark:text-violet-300" />
+              ቀጥታ ደርስ መክፈቻ
+            </h3>
+            <p className="text-[11px] text-violet-800/80 dark:text-violet-200/80 mb-4 leading-relaxed">
+              ለዚህ ተማሪ የተወሰነውን ኪታብ እና ደርስ ወዲያውኑ ይክፈቱ። እርምጃው የፈተና ውጤትን
+              አይቀይርም — የመዳረሻ ፈቃድ ብቻ ይሰጣል።
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              {/* Kitab / Course selection */}
+              <div>
+                <label
+                  htmlFor="direct-unlock-course"
+                  className="block text-[11px] font-bold text-violet-900 dark:text-violet-100 mb-1.5"
+                >
+                  ኪታብ
+                </label>
+                <select
+                  id="direct-unlock-course"
+                  value={directUnlockCourseId}
+                  onChange={(e) => setDirectUnlockCourseId(e.target.value)}
+                  disabled={directUnlockBusy}
+                  className="w-full px-3 py-2.5 rounded-lg border border-violet-300 dark:border-violet-800 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500 transition-all disabled:opacity-60"
+                >
+                  {REQUIRED_COURSES.map((c) => (
+                    <option key={c.slug} value={c.slug}>
+                      {c.displayName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Lesson number */}
+              <div>
+                <label
+                  htmlFor="direct-unlock-lesson"
+                  className="block text-[11px] font-bold text-violet-900 dark:text-violet-100 mb-1.5"
+                >
+                  ደርስ ቁጥር
+                </label>
+                <input
+                  id="direct-unlock-lesson"
+                  type="number"
+                  min={1}
+                  max={100}
+                  inputMode="numeric"
+                  value={directUnlockLessonStr}
+                  onChange={(e) => setDirectUnlockLessonStr(e.target.value)}
+                  disabled={directUnlockBusy || directUnlockIsFinal}
+                  placeholder="1 – 100"
+                  className="w-full px-3 py-2.5 rounded-lg border border-violet-300 dark:border-violet-800 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:border-violet-500 transition-all disabled:opacity-50"
+                />
+              </div>
+            </div>
+
+            {/* Final exam toggle */}
+            <label className="flex items-center gap-2 mb-4 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={directUnlockIsFinal}
+                onChange={(e) => setDirectUnlockIsFinal(e.target.checked)}
+                disabled={directUnlockBusy}
+                className="h-4 w-4 rounded border-violet-300 dark:border-violet-800 text-violet-600 focus:ring-violet-500 disabled:opacity-50"
+              />
+              <span className="text-xs font-semibold text-violet-900 dark:text-violet-100">
+                የመጨረሻ ፈተና (ማጠቃለያ) ክፈት
+              </span>
+            </label>
+
+            {/* Unlock button */}
+            <button
+              type="button"
+              onClick={handleDirectUnlock}
+              disabled={directUnlockBusy}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 hover:bg-violet-700 px-4 py-2.5 text-sm font-bold text-white shadow-sm shadow-violet-900/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {directUnlockBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Unlock className="h-4 w-4" />
+              )}
+              {directUnlockBusy
+                ? 'በመክፈት ላይ...'
+                : directUnlockIsFinal
+                ? 'የመጨረሻ ፈተና ክፈት'
+                : 'ደርሱን ክፈት'}
+            </button>
           </section>
 
           {/* Admin Override info line */}
@@ -2815,11 +3102,6 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 
 // ---------------------------------------------------------------------------
 // Announcement / Notification Composer
-//
-// Fixes applied:
-//   • `AnnouncementModalProps` interface fully typed (no TS7010).
-//   • `recipients` uses the `AnnouncementRecipients` union.
-//   • Component returns `ReactNode` (no `JSX.Element` — avoids TS2503).
 // ---------------------------------------------------------------------------
 function AnnouncementModal({
   title,
