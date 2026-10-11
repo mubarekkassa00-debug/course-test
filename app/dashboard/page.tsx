@@ -1683,7 +1683,7 @@ export default function DashboardPage() {
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* ---------- Telegram Direct Message ---------- */}
           <a
-            href="istibsaronline"
+            href="https://t.me/istibsaronline"
             target="_blank"
             rel="noopener noreferrer"
             className="group flex items-center gap-3 rounded-xl border border-sky-200/70 dark:border-sky-900/50 bg-sky-50/70 dark:bg-sky-950/30 px-4 py-3 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
