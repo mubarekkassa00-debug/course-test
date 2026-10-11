@@ -52,8 +52,7 @@ const courses = [
     category: 'አቂዳ',
     lessonsCount: 11,
     gradient: 'from-blue-700 to-blue-900',
-    image:
-      'https://images/usul-thalatha.jpg',
+    image: '/images/usul-thalatha.jpg',
   },
   {
     id: 2,
@@ -61,8 +60,7 @@ const courses = [
     category: 'ሀዲስ',
     lessonsCount: 11,
     gradient: 'from-purple-700 to-purple-900',
-    image:
-      'https://images/arbain.jpg',
+    image: '/images/arbain.jpg',
   },
   {
     id: 3,
@@ -70,8 +68,7 @@ const courses = [
     category: 'ፊቅህ',
     lessonsCount: 10,
     gradient: 'from-emerald-700 to-emerald-900',
-    image:
-      'https://images/shurut.jpg',
+    image: '/images/shurut.jpg',
   },
   {
     id: 4,
@@ -79,8 +76,7 @@ const courses = [
     category: 'ሲራ',
     lessonsCount: 14,
     gradient: 'from-red-700 to-red-900',
-    image:
-      'https://images/urjumet.jpg',
+    image: '/images/urjumet.jpg',
   },
 ];
 
