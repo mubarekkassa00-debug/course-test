@@ -128,7 +128,7 @@ function buildCertificateFilename(studentName: string): string {
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^A-Za-z0-9_-]/g, '');
-  return `Basira_Certificate_${safe || 'Student'}.pdf`;
+  return `Istibsar_Certificate_${safe || 'Student'}.pdf`;
 }
 
 function readErrorMessage(err: unknown): string {
@@ -565,7 +565,7 @@ export default function CertificatePage() {
                 `rounded-xl` clips the image to match the original tile. */}
             <img
               src="/logo.png"
-              alt="Basira Logo"
+              alt="Istibsar Logo"
               className="h-9 w-9 object-contain rounded-xl"
             />
             <div className="min-w-0">
@@ -573,7 +573,7 @@ export default function CertificatePage() {
                 የኔ ሰርቲፊኬት
               </h1>
               <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                Basira · Certificate
+                Istibsar · Certificate
               </p>
             </div>
           </div>
@@ -740,7 +740,7 @@ export default function CertificatePage() {
             <div className="flex justify-center">
               <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-1.5 text-xs sm:text-sm font-bold text-emerald-700 dark:text-emerald-300 shadow-sm">
                 <Sparkles className="h-4 w-4" />
-                🎉 የባሲራ ትምህርት ማጠናቀቂያ ምስክር ወረቀት
+                🎉 የእስቲብሳር ትምህርት ማጠናቀቂያ ምስክር ወረቀት
               </span>
             </div>
 
@@ -764,12 +764,12 @@ export default function CertificatePage() {
                         can be swapped without touching any code. */}
                     <img
                       src="/logo-transparent.png"
-                      alt="Basira Logo"
+                      alt="Istibsar Logo"
                       className="h-16 w-16 object-contain mx-auto mb-3"
                     />
 
                     <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.25em] text-emerald-700 dark:text-emerald-400 mb-3">
-                      የባሲራ ትምህርት ማጠናቀቂያ
+                      የእስቲብሳር ትምህርት ማጠናቀቂያ
                     </p>
 
                     <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-2">
@@ -787,7 +787,7 @@ export default function CertificatePage() {
                     </p>
 
                     <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed max-w-xl mx-auto">
-                      በባሲራ (Basira) የኦንላይን እስላማዊ ትምህርት መድረክ የሚከተሉትን
+                      በእስቲብሳር (Istibsar) የኦንላይን እስላማዊ ትምህርት መድረክ የሚከተሉትን
                       ኪታቦች በተሳካ ሁኔታ ማጠናቀቁን ያረጋግጣል፡
                     </p>
 
@@ -825,7 +825,7 @@ export default function CertificatePage() {
                     <div className="mt-8 flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                       <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                       <span>
-                        በባሲራ የትምህርት ክፍል የተረጋገጠ ·{' '}
+                        በእስቲብሳር የትምህርት ክፍል የተረጋገጠ ·{' '}
                         {new Date().getFullYear()}
                       </span>
                     </div>
@@ -886,7 +886,7 @@ export default function CertificatePage() {
 
         {/* ---------- Telegram footer ---------- */}
         <a
-          href="https://t.me/Basira_on"
+          href="https://t.me/istibsar_online"
           target="_blank"
           rel="noopener noreferrer"
           className="mt-10 group flex items-center gap-3 rounded-xl border border-sky-200/70 dark:border-sky-900/50 bg-sky-50/70 dark:bg-sky-950/30 px-4 py-3 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
@@ -908,7 +908,7 @@ export default function CertificatePage() {
         </a>
 
         <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-          © {new Date().getFullYear()} ባሲራ · Basira
+          © {new Date().getFullYear()} እስቲብሳር · Istibsar
         </p>
       </main>
     </div>

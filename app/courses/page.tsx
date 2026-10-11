@@ -53,7 +53,7 @@ const courses = [
     lessonsCount: 11,
     gradient: 'from-blue-700 to-blue-900',
     image:
-      'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?auto=format&fit=crop&w=800&q=80',
+      'https://images/usul-thalatha.jpg',
   },
   {
     id: 2,
@@ -62,7 +62,7 @@ const courses = [
     lessonsCount: 11,
     gradient: 'from-purple-700 to-purple-900',
     image:
-      'https://images.unsplash.com/photo-1585036156171-384164a8c675?auto=format&fit=crop&w=800&q=80',
+      'https://images/arbain.jpg',
   },
   {
     id: 3,
@@ -71,7 +71,7 @@ const courses = [
     lessonsCount: 10,
     gradient: 'from-emerald-700 to-emerald-900',
     image:
-      'https://images.unsplash.com/photo-1618022325802-7e5e732d97a1?auto=format&fit=crop&w=800&q=80',
+      'https://images/shurut.jpg',
   },
   {
     id: 4,
@@ -80,7 +80,7 @@ const courses = [
     lessonsCount: 14,
     gradient: 'from-red-700 to-red-900',
     image:
-      'https://images.unsplash.com/photo-1542810634-71277d95dcbb?auto=format&fit=crop&w=800&q=80',
+      'https://images/urjumet.jpg',
   },
 ];
 
