@@ -30,6 +30,8 @@ import {
   X,
   CreditCard,
   ShieldCheck,
+  MessageCircle,
+  Phone,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -1664,6 +1666,73 @@ export default function DashboardPage() {
             Join
           </span>
         </a>
+
+        {/* ============================================================ */}
+        {/* NEW — DIRECT CONTACT BUTTONS (Telegram DM + WhatsApp DM)     */}
+        {/*                                                              */}
+        {/* Two clean, modern buttons that let the student reach the     */}
+        {/* admin directly via a private message. Follows the same      */}
+        {/* visual language as the Telegram group banner above so the    */}
+        {/* footer looks cohesive on both desktop and mobile.            */}
+        {/*                                                              */}
+        {/* 👉 Replace the two placeholders below with your real         */}
+        {/*    Telegram username and WhatsApp phone number:              */}
+        {/*      • Telegram: https://t.me/[INSERT_YOUR_TELEGRAM_USERNAME_HERE] */}
+        {/*      • WhatsApp: https://wa.me/[INSERT_YOUR_WHATSAPP_PHONE_NUMBER_HERE] */}
+        {/* ============================================================ */}
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* ---------- Telegram Direct Message ---------- */}
+          <a
+            href="istibsaronline"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-center gap-3 rounded-xl border border-sky-200/70 dark:border-sky-900/50 bg-sky-50/70 dark:bg-sky-950/30 px-4 py-3 shadow-sm hover:shadow-md hover:border-sky-300 dark:hover:border-sky-700 transition-all duration-300"
+          >
+            <div
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg shadow-sm"
+              style={{ backgroundColor: '#0088cc' }}
+            >
+              <MessageCircle className="h-4 w-4 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-bold text-sky-900 dark:text-sky-100 truncate">
+                በቴሌግራም አግኙን
+              </h3>
+              <p className="text-[11px] text-sky-800/80 dark:text-sky-200/70 truncate">
+                የግል መልእክት ለመላክ
+              </p>
+            </div>
+            <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#0088cc] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#0077b3] transition-colors">
+              Chat
+            </span>
+          </a>
+
+          {/* ---------- WhatsApp Direct Message ---------- */}
+          <a
+            href="https://wa.me/[INSERT_YOUR_WHATSAPP_PHONE_NUMBER_HERE]"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex items-center gap-3 rounded-xl border border-emerald-200/70 dark:border-emerald-900/50 bg-emerald-50/70 dark:bg-emerald-950/30 px-4 py-3 shadow-sm hover:shadow-md hover:border-emerald-300 dark:hover:border-emerald-700 transition-all duration-300"
+          >
+            <div
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg shadow-sm"
+              style={{ backgroundColor: '#25D366' }}
+            >
+              <Phone className="h-4 w-4 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-bold text-emerald-900 dark:text-emerald-100 truncate">
+                በዋትስአፕ አግኙን
+              </h3>
+              <p className="text-[11px] text-emerald-800/80 dark:text-emerald-200/70 truncate">
+                የግል መልእክት ለመላክ
+              </p>
+            </div>
+            <span className="flex-shrink-0 inline-flex items-center gap-1 rounded-full bg-[#25D366] px-3 py-1 text-xs font-bold text-white group-hover:bg-[#1da851] transition-colors">
+              Chat
+            </span>
+          </a>
+        </div>
 
         {/* Footer note */}
         <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
